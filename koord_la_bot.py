@@ -141,8 +141,8 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def inforg_menu_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [
-        "Допрозвон", "Запрос на ГОО",
-        "Запрос на ГКП", "Запрос Пеленг",
+        "Допрозвон", "Контроль ЛНС","Запрос на ГОО",
+        "Запрос на ГКП", "Запрос Геолокации",
         "Запрос камеры БГ", "Оповещение Мегафон",
         "Пользовательский запрос", "Назад"
     ]
@@ -168,7 +168,7 @@ async def inforg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "Запрос на ГОО":
         return await goo_menu_show(update, context)
 
-    if text in ["Запрос Пеленг", "Запрос камеры БГ", "Оповещение Мегафон"]:
+    if text in ["Запрос Геолокации", "Запрос камеры БГ", "Оповещение Мегафон", "Контроль ЛНС"]:
         context.user_data['tasks']['inforg'].append(text)
         await update.message.reply_text(f"✅ Добавлено: {text}")
         return INFORG_MENU
