@@ -180,7 +180,7 @@ async def save_doproznvon(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await inforg_menu_show(update, context)
 
 async def save_user_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['tasks']['inforg'].append(f"Польз. запрос: {update.message.text}")
+    context.user_data['tasks']['inforg'].append(f"Запрос: {update.message.text}")
     return await inforg_menu_show(update, context)
 
 # --- ГКП ---
