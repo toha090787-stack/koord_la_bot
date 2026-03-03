@@ -438,6 +438,7 @@ class ResourcesState:
     scooters: bool = False
     uav: bool = False
     angels: bool = False
+    pegas: bool = False
     tech: Set[str] = field(default_factory=set)
 
 @dataclass
