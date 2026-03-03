@@ -1557,7 +1557,7 @@ async def res_angels(q: CallbackQuery):
 @dp.callback_query(F.data == "res_pegas")
 async def res_pegas(q: CallbackQuery):
     state = st(q.from_user.id)
-    state.resources.pegas = not state.resources.angels
+    state.resources.pegas = not state.resources.pegas
     upsert_resources_task(state)
     await q.answer("Ок")
     await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
