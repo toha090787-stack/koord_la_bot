@@ -402,7 +402,7 @@ TECH_OPTIONS = [
     "Снегоступы",
     "Болотоходы",
     "Штабной прицеп",
-    "Коплект Шатер большой",
+    "Комплект Шатер большой",
     "Комплект Шатер малый",
 ]
 
@@ -956,13 +956,162 @@ async def show_inforg_menu(q: CallbackQuery):
     await safe_edit_text(q, "📋 Задачи для инфоргов — выберите пункт:", reply_markup=kb_inforg(st(q.from_user.id)))
 
 async def send_summary_separated(chat_id: int, bot: Bot, state: UserState):
-    if not state.tasks:
+    import asyncio
+    
+    # Выводим обычные задачи из state.tasks БЕЗ нумерации
+    if state.tasks:
+        await bot.send_message(chat_id, "📋 Список задач:")
+        for (_k, text_md) in state.tasks:
+            # Пропускаем агрегированные задачи (выезд, оборудование, штаб, ресурсы)
+            if _k in ("VYEZD_AGG", "EQUIP_AGG", "HQ_TEAM_AGG", "RESOURCES_AGG"):
+                continue
+            await bot.send_message(chat_id, text_md, parse_mode=ParseMode.MARKDOWN_V2)
+            await asyncio.sleep(0.3)
+    
+    # Выводим информацию о выезде отдельными сообщениями
+    v = state.vyezd
+    
+    # 1. Основная информация о выезде (одно сообщение)
+    main_info_lines = []
+    
+    if v.hq_address:
+        main_info_lines.append(f"🏕 Адрес штаба: {v.hq_address}")
+    
+    if v.hq_coords:
+        main_info_lines.append(f"📍 Координаты штаба: {v.hq_coords}")
+    
+    if v.hq_time:
+        main_info_lines.append(f"⏰ Время штаба: {v.hq_time}")
+    
+    if v.clothes:
+        main_info_lines.append(f"🥾 Форма одежды: {v.clothes}")
+    
+    if v.take:
+        main_info_lines.append("🎒 Взять с собой: " + ", ".join(sorted(v.take)))
+    
+    if main_info_lines:
+        main_text = md2_escape("🚗 Готовим выезд\n\n" + "\n".join(main_info_lines))
+        await bot.send_message(chat_id, main_text, parse_mode="MarkdownV2")
+        await asyncio.sleep(0.5)
+    
+    # 2. Запрос на оборудование (отдельное сообщение)
+    if any([v.equip_qty, v.equip_flags]):
+        equipment_text = vyezd_equipment_markdown(state)
+        if equipment_text:
+            await bot.send_message(chat_id, equipment_text, parse_mode="MarkdownV2")
+            await asyncio.sleep(0.5)
+    
+    # 3. Запрос штабной команды (отдельное сообщение)
+    if v.hq_team:
+        hq_team_text = vyezd_hq_team_markdown(state)
+        if hq_team_text:
+            await bot.send_message(chat_id, hq_team_text, parse_mode="MarkdownV2")
+            await asyncio.sleep(0.5)
+    
+    # 4. Запросы на ресурсы (каждый запрос отдельным сообщением)
+    r = state.resources
+    
+    # 4.1. Карты (отдельное сообщение)
+    if r.maps_center or r.maps_limits or r.maps_grid or r.maps_phonekit is not None:
+        maps_lines = ["🗺 Запрос на Карты\n"]
+        if r.maps_center:
+            maps_lines.append(f"Центр зоны: {r.maps_center}")
+        if r.maps_limits:
+            maps_lines.append(f"Ограничители зоны: {r.maps_limits}")
+        if r.maps_grid:
+            maps_lines.append(f"Шаг сетки: {r.maps_grid}")
+        if r.maps_phonekit is not None:
+            maps_lines.append(f"Комплект для телефонов: {'Да' if r.maps_phonekit else 'Нет'}")
+        
+        maps_text = md2_escape("\n".join(maps_lines))
+        await bot.send_message(chat_id, maps_text, parse_mode="MarkdownV2")
+        await asyncio.sleep(0.5)
+    
+    # 4.2. Ориентирование (отдельное сообщение)
+    if r.orient_qty is not None:
+        orient_text = md2_escape(f"🖨 Запрос на Ориентировки: {r.orient_qty} шт.")
+        await bot.send_message(chat_id, orient_text, parse_mode="MarkdownV2")
+        await asyncio.sleep(0.5)
+    
+    # 4.3. Самокаты (отдельное сообщение)
+    if r.scooters:
+        scooters_text = md2_escape("🛴 Запрос на самокаты")
+        await bot.send_message(chat_id, scooters_text, parse_mode="MarkdownV2")
+        await asyncio.sleep(0.5)
+    
+    # 4.4. БПЛА (отдельное сообщение)
+    if r.uav:
+        uav_text = md2_escape("🛸 Запрос на БПЛА")
+        await bot.send_message(chat_id, uav_text, parse_mode="MarkdownV2")
+        await asyncio.sleep(0.5)
+    
+    # 4.5. Ангелы (отдельное сообщение)
+    if r.angels:
+        angels_text = md2_escape("🚁 Запрос на Ангелов")
+        await bot.send_message(chat_id, angels_text, parse_mode="MarkdownV2")
+        await asyncio.sleep(0.5)
+    
+    # 4.6. Техника (отдельное сообщение)
+    if r.tech:
+        tech_text = md2_escape("🧢 Запрос на технику:\n" + "\n".join(f"• {t}" for t in sorted(r.tech)))
+        await bot.send_message(chat_id, tech_text, parse_mode="MarkdownV2")
+        await asyncio.sleep(0.5)
+    
+    # Если нет ни задач, ни выезда, ни ресурсов
+    has_vyezd = main_info_lines or v.equip_qty or v.equip_flags or v.hq_team
+    has_resources = (r.maps_center or r.maps_limits or r.maps_grid or 
+                    r.maps_phonekit is not None or r.orient_qty is not None or 
+                    r.scooters or r.uav or r.angels or r.tech)
+    
+    if not state.tasks and not has_vyezd and not has_resources:
         await bot.send_message(chat_id, "❗ Список задач пуст.")
-        return
-    await bot.send_message(chat_id, "📋 Список задач:")
-    for i, (_k, text_md) in enumerate(state.tasks, 1):
-        prefix = md2_escape(f"{i}.")
-        await bot.send_message(chat_id, f"{prefix}\n{text_md}", parse_mode=ParseMode.MARKDOWN_V2)
+
+
+# Словарь для перевода названий оборудования на русский
+EQUIPMENT_NAMES_RU = {
+    "flashlights": "Фонари",
+    "radios": "Рации",
+    "batteries": "Аккумуляторы",
+    "navigators": "Навигаторы",
+    "compasses": "Компасы",
+    "powerbanks": "Павербанки",
+    "inverter": "Инвертор",
+    "tape": "Скотч",
+}
+
+
+def vyezd_equipment_markdown(state: UserState) -> str:
+    """Формирует markdown-текст для запроса оборудования"""
+    v = state.vyezd
+    lines = ["🎒 Запрос оборудования\n"]
+    
+    # Количественное оборудование
+    if v.equip_qty:
+        for item, qty in sorted(v.equip_qty.items()):
+            # Переводим название на русский, если есть в словаре
+            item_ru = EQUIPMENT_NAMES_RU.get(item, item)
+            lines.append(f"• {item_ru}: {qty} шт.")
+    
+    # Флаговое оборудование (инвертор/изолента/павербанк)
+    if v.equip_flags:
+        for item in sorted(v.equip_flags):
+            # Переводим название на русский, если есть в словаре
+            item_ru = EQUIPMENT_NAMES_RU.get(item, item)
+            lines.append(f"• {item_ru}")
+    
+    return md2_escape("\n".join(lines))
+
+
+def vyezd_hq_team_markdown(state: UserState) -> str:
+    """Формирует markdown-текст для запроса штабной команды"""
+    v = state.vyezd
+    if not v.hq_team:
+        return ""
+    
+    lines = ["👥 Запрос штабной команды\n"]
+    lines.extend(f"• {name}" for name in sorted(v.hq_team))
+    
+    return md2_escape("\n".join(lines))
 
 # -------------------- Dispatcher --------------------
 
