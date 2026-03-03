@@ -674,6 +674,8 @@ def resources_aggregated_markdown(state: UserState) -> str:
         lines.append("🛸 Запрос на БПЛА")
     if r.angels:
         lines.append("🚁 Запрос на Ангелов")
+    if r.angels:
+        lines.append("🐴 Запрос на Пегасов")
     if r.tech:
         lines.append("🧢 Запрос на технику: " + ", ".join(sorted(r.tech)))
     return md2_escape("\n".join(lines))
@@ -914,6 +916,7 @@ def kb_resources_menu(r: ResourcesState):
     b.button(text=f"{mark_bool(r.scooters)}🛴Запрос на самокаты", callback_data="res_scooters")
     b.button(text=f"{mark_bool(r.uav)}🛸Запрос на БПЛА", callback_data="res_uav")
     b.button(text=f"{mark_bool(r.angels)}🚁Запрос на Ангелов", callback_data="res_angels")
+    b.button(text=f"{mark_bool(r.pegas)}🐴Запрос на Пегасов", callback_data="res_pegas")
     b.button(text=f"{mark_val(r.tech)}🧢Запрос на технику", callback_data="res_tech")
     b.button(text="👍 Готово", callback_data="res_done")
     b.button(text="👈 Назад", callback_data="back_main")
@@ -1050,8 +1053,14 @@ async def send_summary_separated(chat_id: int, bot: Bot, state: UserState):
         angels_text = md2_escape("🚁 Запрос на Ангелов")
         await bot.send_message(chat_id, angels_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
+
+    # 4.6. Пегасы (отдельное сообщение)
+    if r.pegas:
+        pegas_text = md2_escape("🐴 Запрос на Пегасов")
+        await bot.send_message(chat_id, pegas_text, parse_mode="MarkdownV2")
+        await asyncio.sleep(0.5)
     
-    # 4.6. Техника (отдельное сообщение)
+    # 4.7. Техника (отдельное сообщение)
     if r.tech:
         tech_text = md2_escape("🧢 Запрос на технику:\n" + "\n".join(f"• {t}" for t in sorted(r.tech)))
         await bot.send_message(chat_id, tech_text, parse_mode="MarkdownV2")
@@ -1541,6 +1550,14 @@ async def res_uav(q: CallbackQuery):
 async def res_angels(q: CallbackQuery):
     state = st(q.from_user.id)
     state.resources.angels = not state.resources.angels
+    upsert_resources_task(state)
+    await q.answer("Ок")
+    await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
+
+@dp.callback_query(F.data == "res_pegas")
+async def res_pegas(q: CallbackQuery):
+    state = st(q.from_user.id)
+    state.resources.pegas = not state.resources.angels
     upsert_resources_task(state)
     await q.answer("Ок")
     await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
