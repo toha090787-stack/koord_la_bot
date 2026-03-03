@@ -674,7 +674,7 @@ def resources_aggregated_markdown(state: UserState) -> str:
         lines.append("🛸 Запрос на БПЛА")
     if r.angels:
         lines.append("🚁 Запрос на Ангелов")
-    if r.angels:
+    if r.pegas:
         lines.append("🐴 Запрос на Пегасов")
     if r.tech:
         lines.append("🧢 Запрос на технику: " + ", ".join(sorted(r.tech)))
