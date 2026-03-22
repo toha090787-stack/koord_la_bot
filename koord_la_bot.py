@@ -10,9 +10,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.types import CallbackQuery, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 BOT_TOKEN = "8534422390:AAHm6z-poKWBCOED8s3NEmQp4tAqzJ-wxsI"
 
@@ -116,7 +117,7 @@ CALL_QUESTIONS: Dict[str, List[str]] = {
         "Существенные изменения в семье",
         "Резкая смена планов",
         "Способен ли самостоятельно пользоваться ОТ",
-    ],
+        ],
     "call_adults": [
         "ФИО БВП (любая смена ФИО)",
         "Дата рождения и возраст БВП",
@@ -154,7 +155,7 @@ CALL_QUESTIONS: Dict[str, List[str]] = {
         "Соцсети",
         "Контакты друзей/знакомых",
         "Согласие на ориентировку",
-    ],
+        ],
     "call_kids_0_10": [
         "ФИО БВП (любая смена ФИО)",
         "Дата рождения и возраст БВП",
@@ -201,7 +202,7 @@ CALL_QUESTIONS: Dict[str, List[str]] = {
         "Социальные сети",
         "Если похищение (увели, посадили в машину, свидетели, контакты, цвет и марка авто, время, место, камеры наружного наблюдения)",
         "Что пропало из дома",
-    ],
+        ],
     "call_forest": [
         "ФИО БВП (любая смена ФИО)",
         "Дата рождения и возраст БВП",
@@ -246,7 +247,7 @@ CALL_QUESTIONS: Dict[str, List[str]] = {
         "Кто есть на месте пропажи и их контакты",
         "Есть ли на въезде в СНТ шлагбаум/свободный ли проезд",
         "Согласие на ориентировку",
-    ],
+        ],
     "call_police": [
         "Заведено ли уже дело",
         "Если да, то какое",
@@ -263,7 +264,7 @@ CALL_QUESTIONS: Dict[str, List[str]] = {
         "Не помешает ли размещение нашей ориентировки в соц сетях",
         "Не пропадал ли раньше? Где находили",
         "Не отбывал ли ранее наказание за преступление",
-    ],
+        ],
     "call_teens_11_17": [
         "ФИО БВП (любая смена ФИО)",
         "Дата рождения и возраст БВП",
@@ -310,7 +311,7 @@ CALL_QUESTIONS: Dict[str, List[str]] = {
         "Состоит ли на учете в ОДН",
         "Мысли о суициде",
         "Согласие на ориентировку",
-    ],
+],
     "call_elderly_memory": [
         "ФИО БВП (любая смена ФИО)",
         "Дата рождения и возраст БВП",
@@ -362,7 +363,7 @@ CALL_QUESTIONS: Dict[str, List[str]] = {
         "Кредиты/долги",
         "Мысли о суициде",
         "Согласие на ориентировку",
-    ],
+],
 }
 CALL_META = {k: title for k, title in CALL_CATEGORIES}
 
@@ -388,6 +389,7 @@ EQUIP_TITLES = {
     "inverter": "Инвертор",
     "tape": "Скотч",
     "powerbank": "Power bank",
+    "evaq": "Комплект эвакуации",
 }
 
 HQ_TEAM_ROLES = ["Регистратор", "Оперативный картограф", "Связь на ПСР", "Табор"]
@@ -417,11 +419,13 @@ class CallEntry:
 class VyezdState:
     hq_address: str = ""
     hq_coords: str = ""
-    hq_time: str = ""
+    hq_time: str = ""            # HH:MM
     clothes: Optional[str] = None
     take: Set[str] = field(default_factory=set)
-    equip_qty: Dict[str, int] = field(default_factory=dict)
-    equip_flags: Set[str] = field(default_factory=set)
+
+    equip_qty: Dict[str, int] = field(default_factory=dict)  # for qty-needed items
+    equip_flags: Set[str] = field(default_factory=set)       # inverter/tape/powerbank present
+
     hq_team: Set[str] = field(default_factory=set)
 
 @dataclass
@@ -430,6 +434,7 @@ class ResourcesState:
     maps_limits: str = ""
     maps_grid: str = ""
     maps_phonekit: Optional[bool] = None
+
     orient_qty: Optional[int] = None
     scooters: bool = False
     uav: bool = False
@@ -439,27 +444,21 @@ class ResourcesState:
 
 @dataclass
 class UserState:
-    tasks: List[Tuple[str, str]] = field(default_factory=list)
+    tasks: List[Tuple[str, str]] = field(default_factory=list)  # (key, markdownV2_text)
     waiting_input: Optional[str] = None
-    current_menu: str = "start"
-    
+
     gkp_selected: Set[str] = field(default_factory=set)
     gkp_areas: Dict[str, Set[str]] = field(default_factory=dict)
-    gkp_current_key: Optional[str] = None
-    
+
     goo_selected: Set[str] = field(default_factory=set)
     goo_areas: Dict[str, Set[str]] = field(default_factory=dict)
     goo_custom: str = ""
-    goo_current_key: Optional[str] = None
-    
+
     call_entries: List[CallEntry] = field(default_factory=list)
     call_active: Optional[int] = None
     call_cat: Optional[str] = None
-    call_questions_offset: int = 0
-    
+
     vyezd: VyezdState = field(default_factory=VyezdState)
-    vyezd_equip_current: Optional[str] = None
-    
     resources: ResourcesState = field(default_factory=ResourcesState)
 
 USERS: Dict[int, UserState] = {}
@@ -472,20 +471,15 @@ def st(uid: int) -> UserState:
 def reset_state(state: UserState):
     state.tasks.clear()
     state.waiting_input = None
-    state.current_menu = "start"
     state.gkp_selected.clear()
     state.gkp_areas.clear()
-    state.gkp_current_key = None
     state.goo_selected.clear()
     state.goo_areas.clear()
     state.goo_custom = ""
-    state.goo_current_key = None
     state.call_entries.clear()
     state.call_active = None
     state.call_cat = None
-    state.call_questions_offset = 0
     state.vyezd = VyezdState()
-    state.vyezd_equip_current = None
     state.resources = ResourcesState()
 
 def add_task_plain(state: UserState, key: str, human_text: str) -> None:
@@ -622,6 +616,7 @@ def upsert_calls_task(state: UserState):
 
 def vyezd_aggregated_markdown(state: UserState) -> str:
     v = state.vyezd
+    # если ничего не заполнено
     if not any([v.hq_address, v.hq_coords, v.hq_time, v.clothes, v.take, v.equip_qty, v.equip_flags, v.hq_team]):
         return ""
     lines = ["Готовим выезд 🚗"]
@@ -635,6 +630,7 @@ def vyezd_aggregated_markdown(state: UserState) -> str:
         lines.append(f"🥾 Форма одежды: {v.clothes}")
     if v.take:
         lines.append("🎒 Взять с собой: " + ", ".join(sorted(v.take)))
+    # оборудование
     eq_lines = []
     for k in ["flashlights", "batteries", "radios", "navigators", "compasses"]:
         if k in v.equip_qty:
@@ -661,6 +657,7 @@ def resources_aggregated_markdown(state: UserState) -> str:
                 r.orient_qty is not None, r.scooters, r.uav, r.angels, r.tech]):
         return ""
     lines = ["🛠 Запрос на ресурсы:"]
+    # карты (если что-то заполнено в блоке карт)
     if any([r.maps_center, r.maps_limits, r.maps_grid, r.maps_phonekit is not None]):
         lines.append("🗺 Запрос на Карты:")
         if r.maps_center:
@@ -692,326 +689,335 @@ def upsert_resources_task(state: UserState):
     else:
         remove_task_by_key(state, "RESOURCES_AGG")
 
-def vyezd_equipment_markdown(state: UserState) -> str:
-    v = state.vyezd
-    lines = ["🎒 Запрос оборудования\n"]
-    
-    EQUIPMENT_NAMES_RU = {
-        "flashlights": "Фонари",
-        "radios": "Рации",
-        "batteries": "Аккумуляторы",
-        "navigators": "Навигаторы",
-        "compasses": "Компасы",
-        "powerbanks": "Павербанки",
-        "inverter": "Инвертор",
-        "tape": "Скотч",
-    }
-    
-    if v.equip_qty:
-        for item, qty in sorted(v.equip_qty.items()):
-            item_ru = EQUIPMENT_NAMES_RU.get(item, item)
-            lines.append(f"• {item_ru}: {qty} шт.")
-    
-    if v.equip_flags:
-        for item in sorted(v.equip_flags):
-            item_ru = EQUIPMENT_NAMES_RU.get(item, item)
-            lines.append(f"• {item_ru}")
-    
-    return md2_escape("\n".join(lines))
-
-def vyezd_hq_team_markdown(state: UserState) -> str:
-    v = state.vyezd
-    if not v.hq_team:
-        return ""
-    
-    lines = ["👥 Запрос штабной команды\n"]
-    lines.extend(f"• {name}" for name in sorted(v.hq_team))
-    
-    return md2_escape("\n".join(lines))
-
-# -------------------- Keyboards --------------------
+# -------------------- Keyboards helpers --------------------
 
 def kb_start():
-    b = ReplyKeyboardBuilder()
-    b.button(text="📝 Заполнить")
-    b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    b = InlineKeyboardBuilder()
+    b.button(text="📝 Заполнить", callback_data="start_fill")
+    return b.as_markup()
 
-def kb_main():
-    b = ReplyKeyboardBuilder()
-    b.button(text="📋 Задачи для инфоргов")
-    b.button(text="🚗 Выезд")
-    b.button(text="🛠 Запрос на ресурсы")
-    b.button(text="💾 Показать итог")
+def kb_main(state: Optional[UserState] = None):
+    b = InlineKeyboardBuilder()
+    b.button(text="📋 Задачи для инфоргов", callback_data="main_inforg")
+    b.button(text="🚗 Выезд", callback_data="main_vyezd")
+    b.button(text="🛠 Запрос на ресурсы", callback_data="main_resources")
+    b.button(text="💾 Показать итог", callback_data="show_summary")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
 def kb_after_summary():
-    b = ReplyKeyboardBuilder()
-    b.button(text="🖋 Новый запрос")
-    b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    b = InlineKeyboardBuilder()
+    b.button(text="🖋 Новый запрос", callback_data="new_request")
+    return b.as_markup()
 
-def kb_cancel():
-    b = ReplyKeyboardBuilder()
-    b.button(text="❌ Отмена")
-    b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+def kb_cancel(cb: str):
+    b = InlineKeyboardBuilder()
+    b.button(text="Отмена", callback_data=cb)
+    return b.as_markup()
 
-def kb_back(back_text: str = "👈 Назад"):
-    b = ReplyKeyboardBuilder()
-    b.button(text=back_text)
-    b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+def kb_back(cb: str):
+    b = InlineKeyboardBuilder()
+    b.button(text="👈 Назад", callback_data=cb)
+    return b.as_markup()
+
+# -------------------- Inforg menu --------------------
 
 def kb_inforg(state: UserState):
     def mark(key: str) -> str:
         return "✅ " if has_task(state, key) else ""
 
-    b = ReplyKeyboardBuilder()
-    b.button(text=f"{mark('CALLS_AGG')}📞 Допрозвон")
-    b.button(text=f"{mark('AGG_GOO')}📱 Запрос на ГОО")
-    b.button(text=f"{mark('AGG_GKP')}☎ Запрос на ГКП")
-    b.button(text=f"{mark('peleng')}📌 Запрос Пеленг")
-    b.button(text=f"{mark('cam_bg')}🎥 Запрос камеры БГ")
-    b.button(text=f"{mark('megafon')}📢 Оповещение Мегафон")
-    b.button(text=f"{mark('avtonom')}🚨 Поиск автономных групп")
-    b.button(text=f"{mark('LNS')}🔔 Контроль ЛНС")
-    b.button(text=f"{mark('custom')}🖌 Пользовательский запрос")
-    b.button(text="👈 Назад в главное меню")
+    b = InlineKeyboardBuilder()
+    b.button(text=f"{mark('CALLS_AGG')}📞 Допрозвон", callback_data="inf_call")
+    b.button(text=f"{mark('AGG_GOO')}📱 Запрос на ГОО", callback_data="inf_goo")
+    b.button(text=f"{mark('AGG_GKP')}☎ Запрос на ГКП", callback_data="inf_gkp")
+    b.button(text=f"{mark('peleng')}📌 Запрос Пеленг", callback_data="inf_peleng")
+    b.button(text=f"{mark('cam_bg')}🎥 Запрос камеры БГ", callback_data="inf_cam_bg")
+    b.button(text=f"{mark('megafon')}📢 Оповещение Мегафон", callback_data="inf_megafon")
+    b.button(text=f"{mark('avtonom')}🚨 Поиск автономных групп", callback_data="inf_avtonom")
+    b.button(text=f"{mark('LNS')}🔔 Контроль ЛНС", callback_data="inf_LNS")
+    b.button(text=f"{mark('custom')}🖌 Пользовательский запрос", callback_data="inf_custom")
+    b.button(text="👈 Назад", callback_data="back_main")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
+
+# -------------------- GKP/GOO keyboards (как было) --------------------
 
 def kb_gkp(state: UserState):
-    b = ReplyKeyboardBuilder()
+    b = InlineKeyboardBuilder()
     for key, title, _, _ in GKP_ITEMS:
         mark = "✅ " if key in state.gkp_selected else ""
-        b.button(text=f"{mark}{title}")
-    b.button(text="✔️ Готово")
-    b.button(text="👈 Назад")
+        b.button(text=f"{mark}{title}", callback_data=f"gkp_toggle:{key}")
+    b.button(text="👍 Готово", callback_data="gkp_done")
+    b.button(text="👈 Назад", callback_data="main_inforg")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
 def kb_goo(state: UserState):
-    b = ReplyKeyboardBuilder()
+    b = InlineKeyboardBuilder()
     for key, title, _, _ in GOO_ITEMS:
         mark = "✅ " if key in state.goo_selected else ""
-        b.button(text=f"{mark}{title}")
-    b.button(text="✔️ Готово")
-    b.button(text="👈 Назад")
+        b.button(text=f"{mark}{title}", callback_data=f"goo_toggle:{key}")
+    b.button(text="👍 Готово", callback_data="goo_done")
+    b.button(text="👈 Назад", callback_data="main_inforg")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
-def kb_areas(kind: str, selected: Set[str]):
-    b = ReplyKeyboardBuilder()
-    
+def kb_area_picker(prefix: str, codes: List[str], selected: Set[str], done_cb: str, back_cb: str, cols: int = 2):
+    b = InlineKeyboardBuilder()
+    for c in codes:
+        label = decode_area(c)
+        mark = "✅ " if c in selected else ""
+        b.button(text=f"{mark}{label}", callback_data=f"{prefix}:{c}")
+    b.button(text="👍 Готово", callback_data=done_cb)
+    b.button(text="👈 Назад", callback_data=back_cb)
+    b.adjust(cols)
+    return b.as_markup()
+
+def kb_goo_areas(key: str, state: UserState):
+    chosen = state.goo_areas.get(key, set())
+    _title, _needs, kind = GOO_META[key]
+    b = InlineKeyboardBuilder()
     if kind == "spb":
         all_code = "SPB_ALL"
-        mark = "✅ " if all_code in selected else ""
-        b.button(text=f"{mark}Весь город")
+        b.button(text=("✅ " if all_code in chosen else "") + "Весь город",
+                 callback_data=f"goo_area:{key}:{all_code}")
         for i, name in enumerate(SPB_DISTRICTS):
             code = spb_code(i)
-            mark = "✅ " if code in selected else ""
-            b.button(text=f"{mark}{name}")
+            b.button(text=("✅ " if code in chosen else "") + name,
+                     callback_data=f"goo_area:{key}:{code}")
     elif kind == "lo":
         all_code = "LO_ALL"
-        mark = "✅ " if all_code in selected else ""
-        b.button(text=f"{mark}Вся область")
+        b.button(text=("✅ " if all_code in chosen else "") + "Вся область",
+                 callback_data=f"goo_area:{key}:{all_code}")
         for i, name in enumerate(LO_DISTRICTS):
             code = lo_code(i)
-            mark = "✅ " if code in selected else ""
-            b.button(text=f"{mark}{name}")
-    
-    b.button(text="✔️ Готово")
-    b.button(text="👈 Назад")
+            b.button(text=("✅ " if code in chosen else "") + name,
+                     callback_data=f"goo_area:{key}:{code}")
+    b.button(text="👍 Готово", callback_data=f"goo_area_done:{key}")
+    b.button(text="👈 Назад", callback_data="inf_goo")
     b.adjust(2)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
+
+# -------------------- Call keyboards (как было) --------------------
+
+def ensure_active_call_entry(state: UserState) -> CallEntry:
+    if state.call_active is None or state.call_active < 0 or state.call_active >= len(state.call_entries):
+        state.call_entries.append(CallEntry())
+        state.call_active = len(state.call_entries) - 1
+    return state.call_entries[state.call_active]
 
 def kb_call_categories(state: UserState):
-    b = ReplyKeyboardBuilder()
+    b = InlineKeyboardBuilder()
     entry = None
     if state.call_active is not None and 0 <= state.call_active < len(state.call_entries):
         entry = state.call_entries[state.call_active]
-    
     for cat_key, title in CALL_CATEGORIES:
         chosen = False
         if entry:
             chosen = bool(entry.selected.get(cat_key)) or bool(entry.manual.get(cat_key))
-        mark = "✅ " if chosen else ""
-        b.button(text=f"{mark}{title}")
-    
-    b.button(text="➕ Добавить ещё допрозвон")
-    b.button(text="✔️ Готово")
-    b.button(text="👈 Назад")
+        b.button(text=("✅ " if chosen else "") + title, callback_data=f"call_cat:{cat_key}")
+    b.button(text="➕ Добавить ещё допрозвон", callback_data="call_new_entry")
+    b.button(text="👍 Готово", callback_data="call_done")
+    b.button(text="👈 Назад", callback_data="main_inforg")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
-def kb_call_questions(cat_key: str, selected: Set[int], offset: int = 0):
-    b = ReplyKeyboardBuilder()
-    questions = CALL_QUESTIONS.get(cat_key, [])
-    
-    # Показываем 20 вопросов начиная с offset
-    page_size = 20
-    start_idx = offset
-    end_idx = min(start_idx + page_size, len(questions))
-    
-    for idx in range(start_idx, end_idx):
-        q = questions[idx]
+def build_questions_hint(cat_key: str, entry: CallEntry, limit: int = 40) -> str:
+    qs = CALL_QUESTIONS.get(cat_key, [])
+    selected = sorted(entry.selected.get(cat_key, set()))
+    manual = entry.manual.get(cat_key, [])
+    chosen: List[str] = []
+    for i in selected:
+        if 0 <= i < len(qs):
+            chosen.append(qs[i])
+    chosen.extend([t for t in manual if (t or "").strip()])
+    if not chosen:
+        return "Выбрано: ничего"
+    shown = chosen[:limit]
+    tail = "" if len(chosen) <= limit else f"\n…и ещё {len(chosen)-limit}."
+    return "Выбрано:\n" + "\n".join(f"• {x}" for x in shown) + tail
+
+def kb_call_questions(state: UserState, cat_key: str):
+    b = InlineKeyboardBuilder()
+    entry = state.call_entries[state.call_active]
+    selected = entry.selected.setdefault(cat_key, set())
+    for idx, q in enumerate(CALL_QUESTIONS.get(cat_key, [])):
         mark = "✅ " if idx in selected else ""
-        short_q = q[:40] + "..." if len(q) > 40 else q
-        b.button(text=f"{mark}{short_q}")
-    
-    # Кнопки навигации
-    if end_idx < len(questions):
-        b.button(text="➡️ Показать ещё вопросы")
-    if offset > 0:
-        b.button(text="⬅️ Показать предыдущие")
-    
-    b.button(text="✏️ Ручной ввод")
-    b.button(text="👈 Назад к категориям")
+        b.button(text=f"{mark}{q}", callback_data=f"call_q:{cat_key}:{idx}")
+    b.button(text="➕ Ручной ввод", callback_data=f"call_manual:{cat_key}")
+    b.button(text="⬅️ Назад к категориям", callback_data="call_back_to_cats")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
+
+# -------------------- Vyezd keyboards --------------------
 
 def kb_vyezd_clothes(current: Optional[str]):
-    b = ReplyKeyboardBuilder()
+    b = InlineKeyboardBuilder()
     for opt in VYEZD_CLOTHES:
         mark = "✅ " if current == opt else ""
-        b.button(text=f"{mark}{opt}")
+        b.button(text=f"{mark}{opt}", callback_data=f"vyezd_clothes:{opt}")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
 def kb_vyezd_take(selected: Set[str]):
-    b = ReplyKeyboardBuilder()
+    b = InlineKeyboardBuilder()
     for opt in VYEZD_TAKE:
         mark = "✅ " if opt in selected else ""
-        b.button(text=f"{mark}{opt}")
-    b.button(text="✔️ Готово")
+        b.button(text=f"{mark}{opt}", callback_data=f"vyezd_take:{opt}")
+    b.button(text="👍 Готово", callback_data="vyezd_take_done")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
 def kb_equip_menu(v: VyezdState):
     def mark_qty(k: str) -> str:
         return f"✅ " if k in v.equip_qty else ""
     def mark_flag(k: str) -> str:
         return f"✅ " if k in v.equip_flags else ""
-    
-    b = ReplyKeyboardBuilder()
-    b.button(text=f"{mark_qty('flashlights')}🔦 Фонари")
-    b.button(text=f"{mark_qty('batteries')}🔋 Аккумуляторы")
-    b.button(text=f"{mark_qty('radios')}📢 Рации")
-    b.button(text=f"{mark_qty('navigators')}🗺️ Навигаторы")
-    b.button(text=f"{mark_qty('compasses')}🧭 Компасы")
-    b.button(text=f"{mark_flag('inverter')}🔌 Инвертор")
-    b.button(text=f"{mark_flag('tape')}📄 Скотч")
-    b.button(text=f"{mark_flag('powerbank')}⚡ Power bank")
-    b.button(text="👉 Дальше")
-    b.button(text="👈 Назад")
+    b = InlineKeyboardBuilder()
+    b.button(text=f"{mark_qty('flashlights')}🔦Фонари", callback_data="eq:flashlights")
+    b.button(text=f"{mark_qty('batteries')}🔋Аккумуляторы", callback_data="eq:batteries")
+    b.button(text=f"{mark_qty('radios')}📢Рации", callback_data="eq:radios")
+    b.button(text=f"{mark_qty('navigators')}🗺️Навигаторы", callback_data="eq:navigators")
+    b.button(text=f"{mark_qty('compasses')}🧭Компасы", callback_data="eq:compasses")
+    b.button(text=f"{mark_flag('inverter')}🔌Инвертор", callback_data="eq_flag:inverter")
+    b.button(text=f"{mark_flag('tape')}📄Скотч", callback_data="eq_flag:tape")
+    b.button(text=f"{mark_flag('powerbank')}⚡Power bank", callback_data="eq_flag:powerbank")
+    b.button(text=f"{mark_flag('evaq')}🧰 Комплект эвакуации", callback_data="eq_flag:evaq")
+    b.button(text="👉 Дальше", callback_data="vyezd_to_hqteam")
+    b.button(text="👈 Назад", callback_data="back_main")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
 def kb_equip_qty(kind: str):
-    b = ReplyKeyboardBuilder()
+    b = InlineKeyboardBuilder()
     for n in EQUIP_PRESETS[kind]:
-        b.button(text=str(n))
-    b.button(text="✏️ Ввести количество")
-    b.button(text="👈 Назад")
+        b.button(text=str(n), callback_data=f"eq_set:{kind}:{n}")
+    b.button(text="Ввести количество", callback_data=f"eq_custom:{kind}")
+    b.button(text="👈 Назад", callback_data="vyezd_equip")
     b.adjust(3)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
 def kb_hq_team(selected: Set[str]):
-    b = ReplyKeyboardBuilder()
+    b = InlineKeyboardBuilder()
     for role in HQ_TEAM_ROLES:
         mark = "✅ " if role in selected else ""
-        b.button(text=f"{mark}{role}")
-    b.button(text="✔️ Готово")
+        b.button(text=f"{mark}{role}", callback_data=f"hq_team:{role}")
+    b.button(text="👍 Готово", callback_data="vyezd_done")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
+
+# -------------------- Resources keyboards --------------------
 
 def kb_resources_menu(r: ResourcesState):
     def mark_bool(v: bool) -> str:
         return "✅ " if v else ""
     def mark_val(v) -> str:
         return "✅ " if v not in (None, "", set()) else ""
-    
-    b = ReplyKeyboardBuilder()
-    b.button(text=f"{mark_val(r.maps_center or r.maps_limits or r.maps_grid or r.maps_phonekit)}🗺 Запрос на Карты")
-    b.button(text=f"{mark_val(r.orient_qty)}🖨 Запрос на Ориентировки")
-    b.button(text=f"{mark_bool(r.scooters)}🛴 Запрос на самокаты")
-    b.button(text=f"{mark_bool(r.uav)}🛸 Запрос на БПЛА")
-    b.button(text=f"{mark_bool(r.angels)}🚁 Запрос на Ангелов")
-    b.button(text=f"{mark_bool(r.pegas)}🐴 Запрос на Пегасов")
-    b.button(text=f"{mark_val(r.tech)}🧢 Запрос на технику")
-    b.button(text="✔️ Готово")
-    b.button(text="👈 Назад")
+    b = InlineKeyboardBuilder()
+    b.button(text=f"{mark_val(r.maps_center or r.maps_limits or r.maps_grid or r.maps_phonekit)}Запрос на Карты", callback_data="res_maps")
+    b.button(text=f"{mark_val(r.orient_qty)}🖨Запрос на Ориентировки", callback_data="res_orients")
+    b.button(text=f"{mark_bool(r.scooters)}🛴Запрос на самокаты", callback_data="res_scooters")
+    b.button(text=f"{mark_bool(r.uav)}🛸Запрос на БПЛА", callback_data="res_uav")
+    b.button(text=f"{mark_bool(r.angels)}🚁Запрос на Ангелов", callback_data="res_angels")
+    b.button(text=f"{mark_bool(r.pegas)}🐴Запрос на Пегасов", callback_data="res_pegas")
+    b.button(text=f"{mark_val(r.tech)}🧢Запрос на технику", callback_data="res_tech")
+    b.button(text="👍 Готово", callback_data="res_done")
+    b.button(text="👈 Назад", callback_data="back_main")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
-def kb_yes_no():
-    b = ReplyKeyboardBuilder()
-    b.button(text="Да")
-    b.button(text="Нет")
-    b.button(text="👈 Назад")
+def kb_yes_no(cb_yes: str, cb_no: str, back_cb: str):
+    b = InlineKeyboardBuilder()
+    b.button(text="Да", callback_data=cb_yes)
+    b.button(text="Нет", callback_data=cb_no)
+    b.button(text="👈 Назад", callback_data=back_cb)
     b.adjust(2)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
 def kb_tech_picker(selected: Set[str]):
-    b = ReplyKeyboardBuilder()
+    b = InlineKeyboardBuilder()
     for opt in TECH_OPTIONS:
         mark = "✅ " if opt in selected else ""
-        b.button(text=f"{mark}{opt}")
-    b.button(text="✔️ Готово")
+        b.button(text=f"{mark}{opt}", callback_data=f"tech:{opt}")
+    b.button(text="👍 Готово", callback_data="tech_done")
     b.adjust(1)
-    return b.as_markup(resize_keyboard=True)
+    return b.as_markup()
 
-# -------------------- Summary --------------------
+# -------------------- Safe edit --------------------
+
+async def safe_edit_text(q: CallbackQuery, text: str, reply_markup=None):
+    try:
+        await q.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            return
+        raise
+
+# -------------------- UI helpers --------------------
+
+async def show_main(q: CallbackQuery):
+    await safe_edit_text(q, "👆 Выберите раздел:", reply_markup=kb_main())
+
+async def show_inforg_menu(q: CallbackQuery):
+    await safe_edit_text(q, "📋 Задачи для инфоргов — выберите пункт:", reply_markup=kb_inforg(st(q.from_user.id)))
 
 async def send_summary_separated(chat_id: int, bot: Bot, state: UserState):
+    import asyncio
+
+    # Выводим обычные задачи из state.tasks БЕЗ нумерации
     if state.tasks:
         await bot.send_message(chat_id, "📋 Список задач:")
         for (_k, text_md) in state.tasks:
+            # Пропускаем агрегированные задачи (выезд, оборудование, штаб, ресурсы)
             if _k in ("VYEZD_AGG", "EQUIP_AGG", "HQ_TEAM_AGG", "RESOURCES_AGG"):
                 continue
             await bot.send_message(chat_id, text_md, parse_mode=ParseMode.MARKDOWN_V2)
             await asyncio.sleep(0.3)
-    
+
+    # Выводим информацию о выезде отдельными сообщениями
     v = state.vyezd
-    
+
+    # 1. Основная информация о выезде (одно сообщение)
     main_info_lines = []
-    
+
     if v.hq_address:
         main_info_lines.append(f"🏕 Адрес штаба: {v.hq_address}")
-    
+
     if v.hq_coords:
         main_info_lines.append(f"📍 Координаты штаба: {v.hq_coords}")
-    
+
     if v.hq_time:
         main_info_lines.append(f"⏰ Время штаба: {v.hq_time}")
-    
+
     if v.clothes:
         main_info_lines.append(f"🥾 Форма одежды: {v.clothes}")
-    
+
     if v.take:
         main_info_lines.append("🎒 Взять с собой: " + ", ".join(sorted(v.take)))
-    
+
     if main_info_lines:
         main_text = md2_escape("🚗 Готовим выезд\n\n" + "\n".join(main_info_lines))
         await bot.send_message(chat_id, main_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
-    
+
+    # 2. Запрос на оборудование (отдельное сообщение)
     if any([v.equip_qty, v.equip_flags]):
         equipment_text = vyezd_equipment_markdown(state)
         if equipment_text:
             await bot.send_message(chat_id, equipment_text, parse_mode="MarkdownV2")
             await asyncio.sleep(0.5)
-    
+
+    # 3. Запрос штабной команды (отдельное сообщение)
     if v.hq_team:
         hq_team_text = vyezd_hq_team_markdown(state)
         if hq_team_text:
             await bot.send_message(chat_id, hq_team_text, parse_mode="MarkdownV2")
             await asyncio.sleep(0.5)
-    
+
+    # 4. Запросы на ресурсы (каждый запрос отдельным сообщением)
     r = state.resources
-    
+
+    # 4.1. Карты (отдельное сообщение)
     if r.maps_center or r.maps_limits or r.maps_grid or r.maps_phonekit is not None:
         maps_lines = ["🗺 Запрос на Карты\n"]
         if r.maps_center:
@@ -1022,821 +1028,697 @@ async def send_summary_separated(chat_id: int, bot: Bot, state: UserState):
             maps_lines.append(f"Шаг сетки: {r.maps_grid}")
         if r.maps_phonekit is not None:
             maps_lines.append(f"Комплект для телефонов: {'Да' if r.maps_phonekit else 'Нет'}")
-        
+
         maps_text = md2_escape("\n".join(maps_lines))
         await bot.send_message(chat_id, maps_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
-    
+
+    # 4.2. Ориентирование (отдельное сообщение)
     if r.orient_qty is not None:
         orient_text = md2_escape(f"🖨 Запрос на Ориентировки: {r.orient_qty} шт.")
         await bot.send_message(chat_id, orient_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
-    
+
+    # 4.3. Самокаты (отдельное сообщение)
     if r.scooters:
         scooters_text = md2_escape("🛴 Запрос на самокаты")
         await bot.send_message(chat_id, scooters_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
-    
+
+    # 4.4. БПЛА (отдельное сообщение)
     if r.uav:
         uav_text = md2_escape("🛸 Запрос на БПЛА")
         await bot.send_message(chat_id, uav_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
-    
+
+    # 4.5. Ангелы (отдельное сообщение)
     if r.angels:
         angels_text = md2_escape("🚁 Запрос на Ангелов")
         await bot.send_message(chat_id, angels_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
 
+    # 4.6. Пегасы (отдельное сообщение)
     if r.pegas:
         pegas_text = md2_escape("🐴 Запрос на Пегасов")
         await bot.send_message(chat_id, pegas_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
-    
+
+    # 4.7. Техника (отдельное сообщение)
     if r.tech:
         tech_text = md2_escape("🧢 Запрос на технику:\n" + "\n".join(f"• {t}" for t in sorted(r.tech)))
         await bot.send_message(chat_id, tech_text, parse_mode="MarkdownV2")
         await asyncio.sleep(0.5)
-    
+
+    # Если нет ни задач, ни выезда, ни ресурсов
     has_vyezd = main_info_lines or v.equip_qty or v.equip_flags or v.hq_team
     has_resources = (r.maps_center or r.maps_limits or r.maps_grid or 
                     r.maps_phonekit is not None or r.orient_qty is not None or 
                     r.scooters or r.uav or r.angels or r.tech)
-    
+
     if not state.tasks and not has_vyezd and not has_resources:
         await bot.send_message(chat_id, "❗ Список задач пуст.")
 
-# -------------------- Handlers --------------------
+
+# Словарь для перевода названий оборудования на русский
+EQUIPMENT_NAMES_RU = {
+    "flashlights": "Фонари",
+    "radios": "Рации",
+    "batteries": "Аккумуляторы",
+    "navigators": "Навигаторы",
+    "compasses": "Компасы",
+    "powerbanks": "Павербанки",
+    "inverter": "Инвертор",
+    "tape": "Скотч",
+    "evaq": "Коиплект эвакуации",
+}
+
+
+def vyezd_equipment_markdown(state: UserState) -> str:
+    """Формирует markdown-текст для запроса оборудования"""
+    v = state.vyezd
+    lines = ["🎒 Запрос оборудования\n"]
+
+    # Количественное оборудование
+    if v.equip_qty:
+        for item, qty in sorted(v.equip_qty.items()):
+            # Переводим название на русский, если есть в словаре
+            item_ru = EQUIPMENT_NAMES_RU.get(item, item)
+            lines.append(f"• {item_ru}: {qty} шт.")
+
+    # Флаговое оборудование (инвертор/изолента/павербанк)
+    if v.equip_flags:
+        for item in sorted(v.equip_flags):
+            # Переводим название на русский, если есть в словаре
+            item_ru = EQUIPMENT_NAMES_RU.get(item, item)
+            lines.append(f"• {item_ru}")
+
+    return md2_escape("\n".join(lines))
+
+
+def vyezd_hq_team_markdown(state: UserState) -> str:
+    """Формирует markdown-текст для запроса штабной команды"""
+    v = state.vyezd
+    if not v.hq_team:
+        return ""
+
+    lines = ["👥 Запрос штабной команды\n"]
+    lines.extend(f"• {name}" for name in sorted(v.hq_team))
+
+    return md2_escape("\n".join(lines))
+
+# -------------------- Dispatcher --------------------
 
 dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    reset_state(st(m.from_user.id))
     await m.answer("Нажмите «Заполнить», чтобы начать", reply_markup=kb_start())
 
-@dp.message(F.text == "📝 Заполнить")
-async def start_fill(m: Message):
-    state = st(m.from_user.id)
-    reset_state(state)
-    state.current_menu = "main"
-    await m.answer("👆 Выберите раздел:", reply_markup=kb_main())
+@dp.callback_query(F.data == "start_fill")
+async def start_fill(q: CallbackQuery):
+    reset_state(st(q.from_user.id))
+    await show_main(q)
 
-@dp.message(F.text == "🖋 Новый запрос")
-async def new_request(m: Message):
-    state = st(m.from_user.id)
-    reset_state(state)
-    await m.answer("Нажмите «Заполнить», чтобы начать", reply_markup=kb_start())
+@dp.callback_query(F.data == "new_request")
+async def new_request(q: CallbackQuery):
+    reset_state(st(q.from_user.id))
+    await safe_edit_text(q, "Нажмите «Заполнить», чтобы начать", reply_markup=kb_start())
 
-@dp.message(F.text.in_(["👈 Назад в главное меню", "👈 Назад"]))
-async def back_to_main(m: Message):
-    state = st(m.from_user.id)
-    
-    if state.current_menu == "inforg":
-        state.current_menu = "main"
-        state.waiting_input = None
-        await m.answer("👆 Выберите раздел:", reply_markup=kb_main())
-    elif state.current_menu == "gkp":
-        state.current_menu = "inforg"
-        state.waiting_input = None
-        await m.answer("📋 Задачи для инфоргов — выберите пункт:", reply_markup=kb_inforg(state))
-    elif state.current_menu == "gkp_areas":
-        state.current_menu = "gkp"
-        state.waiting_input = None
-        await m.answer("Запрос на ГКП — выберите нужные пункты (можно несколько):", reply_markup=kb_gkp(state))
-    elif state.current_menu == "goo":
-        state.current_menu = "inforg"
-        state.waiting_input = None
-        await m.answer("📋 Задачи для инфоргов — выберите пункт:", reply_markup=kb_inforg(state))
-    elif state.current_menu == "goo_areas":
-        state.current_menu = "goo"
-        state.waiting_input = None
-        await m.answer("Запрос на ГОО — выберите пункты (можно несколько):", reply_markup=kb_goo(state))
-    elif state.current_menu == "call_categories":
-        state.current_menu = "inforg"
-        state.waiting_input = None
-        await m.answer("📋 Задачи для инфоргов — выберите пункт:", reply_markup=kb_inforg(state))
-    elif state.current_menu == "call_questions":
-        state.current_menu = "call_categories"
-        state.waiting_input = None
-        state.call_questions_offset = 0
-        await m.answer("Допрозвон — выберите категорию:", reply_markup=kb_call_categories(state))
-    elif state.current_menu == "vyezd_equip":
-        state.current_menu = "main"
-        state.waiting_input = None
-        await m.answer("👆 Выберите раздел:", reply_markup=kb_main())
-    elif state.current_menu == "vyezd_equip_qty":
-        state.current_menu = "vyezd_equip"
-        state.waiting_input = None
-        await m.answer("Выезд → Запрос оборудования", reply_markup=kb_equip_menu(state.vyezd))
-    elif state.current_menu == "resources_menu":
-        state.current_menu = "main"
-        state.waiting_input = None
-        await m.answer("👆 Выберите раздел:", reply_markup=kb_main())
-    else:
-        state.current_menu = "main"
-        state.waiting_input = None
-        await m.answer("👆 Выберите раздел:", reply_markup=kb_main())
+@dp.callback_query(F.data == "back_main")
+async def back_main(q: CallbackQuery):
+    st(q.from_user.id).waiting_input = None
+    await show_main(q)
 
-# -------------------- Main Menu --------------------
+@dp.callback_query(F.data == "main_inforg")
+async def main_inforg(q: CallbackQuery):
+    st(q.from_user.id).waiting_input = None
+    await show_inforg_menu(q)
 
-@dp.message(F.text == "📋 Задачи для инфоргов")
-async def main_inforg(m: Message):
-    state = st(m.from_user.id)
-    state.current_menu = "inforg"
+# -------------------- Итог --------------------
+
+@dp.callback_query(F.data == "show_summary")
+async def show_summary(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = None
-    await m.answer("📋 Задачи для инфоргов — выберите пункт:", reply_markup=kb_inforg(state))
+    await show_main(q)
+    await send_summary_separated(q.message.chat.id, q.bot, state)
+    await q.bot.send_message(q.message.chat.id, "Завершено", reply_markup=kb_after_summary())
 
-@dp.message(F.text == "💾 Показать итог")
-async def show_summary(m: Message):
-    state = st(m.from_user.id)
-    state.waiting_input = None
-    await send_summary_separated(m.chat.id, m.bot, state)
-    await m.answer("Завершено", reply_markup=kb_after_summary())
+# -------------------- Инфорги: простые --------------------
 
-# -------------------- Inforg Simple Tasks --------------------
+@dp.callback_query(F.data == "inf_peleng")
+async def inf_peleng(q: CallbackQuery):
+    added = toggle_simple_task(st(q.from_user.id), "peleng", "📌 Запрос Пеленг")
+    await q.answer("Добавлено" if added else "Убрано")
+    await show_inforg_menu(q)
 
-@dp.message(F.text.regexp(r"^✅?\s*📌 Запрос Пеленг"))
-async def inf_peleng(m: Message):
-    state = st(m.from_user.id)
-    toggle_simple_task(state, "peleng", "📌 Запрос Пеленг")
-    await m.answer("Задача обновлена", reply_markup=kb_inforg(state))
+@dp.callback_query(F.data == "inf_cam_bg")
+async def inf_cam_bg(q: CallbackQuery):
+    added = toggle_simple_task(st(q.from_user.id), "cam_bg", "🎥 Запрос камеры БГ")
+    await q.answer("Добавлено" if added else "Убрано")
+    await show_inforg_menu(q)
 
-@dp.message(F.text.regexp(r"^✅?\s*🎥 Запрос камеры БГ"))
-async def inf_cam_bg(m: Message):
-    state = st(m.from_user.id)
-    toggle_simple_task(state, "cam_bg", "🎥 Запрос камеры БГ")
-    await m.answer("Задача обновлена", reply_markup=kb_inforg(state))
+@dp.callback_query(F.data == "inf_avtonom")
+async def inf_megafon(q: CallbackQuery):
+    added = toggle_simple_task(st(q.from_user.id), "avtonom", "🚨 Поиск автономных групп")
+    await q.answer("Добавлено" if added else "Убрано")
+    await show_inforg_menu(q)
 
-@dp.message(F.text.regexp(r"^✅?\s*🚨 Поиск автономных групп"))
-async def inf_avtonom(m: Message):
-    state = st(m.from_user.id)
-    toggle_simple_task(state, "avtonom", "🚨 Поиск автономных групп")
-    await m.answer("Задача обновлена", reply_markup=kb_inforg(state))
+@dp.callback_query(F.data == "inf_LNS")
+async def inf_megafon(q: CallbackQuery):
+    added = toggle_simple_task(st(q.from_user.id), "LNS", "🔔 Контроль ЛНС")
+    await q.answer("Добавлено" if added else "Убрано")
+    await show_inforg_menu(q)  
 
-@dp.message(F.text.regexp(r"^✅?\s*🔔 Контроль ЛНС"))
-async def inf_lns(m: Message):
-    state = st(m.from_user.id)
-    toggle_simple_task(state, "LNS", "🔔 Контроль ЛНС")
-    await m.answer("Задача обновлена", reply_markup=kb_inforg(state))
+@dp.callback_query(F.data == "inf_megafon")
+async def inf_megafon(q: CallbackQuery):
+    added = toggle_simple_task(st(q.from_user.id), "megafon", "📢 Оповещение Мегафон")
+    await q.answer("Добавлено" if added else "Убрано")
+    await show_inforg_menu(q)
 
-@dp.message(F.text.regexp(r"^✅?\s*📢 Оповещение Мегафон"))
-async def inf_megafon(m: Message):
-    state = st(m.from_user.id)
-    toggle_simple_task(state, "megafon", "📢 Оповещение Мегафон")
-    await m.answer("Задача обновлена", reply_markup=kb_inforg(state))
+# -------------------- Пользовательский запрос --------------------
 
-# -------------------- Custom Task --------------------
-
-@dp.message(F.text.regexp(r"^✅?\s*🖌 Пользовательский запрос"))
-async def inf_custom(m: Message):
-    state = st(m.from_user.id)
+@dp.callback_query(F.data == "inf_custom")
+async def inf_custom(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = "custom"
-    await m.answer("Введите пользовательский текст (сообщением)", reply_markup=kb_cancel())
+    await safe_edit_text(q, "Введите пользовательский текст (сообщением)", reply_markup=kb_cancel("main_inforg"))
 
-# -------------------- GKP --------------------
+# -------------------- ГКП --------------------
 
-@dp.message(F.text.regexp(r"^✅?\s*☎ Запрос на ГКП"))
-async def inf_gkp(m: Message):
-    state = st(m.from_user.id)
-    state.current_menu = "gkp"
+@dp.callback_query(F.data == "inf_gkp")
+async def inf_gkp(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = None
-    await m.answer("Запрос на ГКП — выберите нужные пункты (можно несколько):", reply_markup=kb_gkp(state))
+    await safe_edit_text(q, "Запрос на ГКП — выберите нужные пункты (можно несколько):", reply_markup=kb_gkp(state))
 
-@dp.message(F.text == "✔️ Готово")
-async def gkp_goo_done(m: Message):
-    state = st(m.from_user.id)
-    
-    if state.current_menu == "gkp":
-        txt_md = gkp_aggregated_markdown(state)
-        if txt_md:
-            upsert_task_markdown(state, "AGG_GKP", txt_md)
-        else:
-            remove_task_by_key(state, "AGG_GKP")
-        state.current_menu = "inforg"
-        await m.answer("Готово", reply_markup=kb_inforg(state))
-        
-    elif state.current_menu == "goo":
-        txt_md = goo_aggregated_markdown(state)
-        if txt_md:
-            upsert_task_markdown(state, "AGG_GOO", txt_md)
-        else:
-            remove_task_by_key(state, "AGG_GOO")
-        state.current_menu = "inforg"
-        await m.answer("Готово", reply_markup=kb_inforg(state))
-        
-    elif state.current_menu == "gkp_areas":
-        state.current_menu = "gkp"
-        await m.answer("Запрос на ГКП — выберите нужные пункты:", reply_markup=kb_gkp(state))
-        
-    elif state.current_menu == "goo_areas":
-        state.current_menu = "goo"
-        await m.answer("Запрос на ГОО — выберите пункты:", reply_markup=kb_goo(state))
-        
-    elif state.current_menu == "call_categories":
-        upsert_calls_task(state)
-        state.current_menu = "inforg"
-        await m.answer("Готово", reply_markup=kb_inforg(state))
-        
-    elif state.current_menu == "vyezd_take":
-        state.current_menu = "vyezd_equip"
-        await m.answer("Выезд → Запрос оборудования:", reply_markup=kb_equip_menu(state.vyezd))
-        
-    elif state.current_menu == "vyezd_hq_team":
-        upsert_vyezd_task(state)
-        state.current_menu = "main"
-        await m.answer("Готово", reply_markup=kb_main())
-        
-    elif state.current_menu == "resources_menu":
-        upsert_resources_task(state)
-        state.current_menu = "main"
-        await m.answer("Готово", reply_markup=kb_main())
-        
-    elif state.current_menu == "tech_picker":
-        upsert_resources_task(state)
-        state.current_menu = "resources_menu"
-        await m.answer("Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
-
-# -------------------- GOO --------------------
-
-@dp.message(F.text.regexp(r"^✅?\s*📱 Запрос на ГОО"))
-async def inf_goo(m: Message):
-    state = st(m.from_user.id)
-    state.current_menu = "goo"
+@dp.callback_query(F.data.startswith("gkp_toggle:"))
+async def gkp_toggle(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = None
-    await m.answer("Запрос на ГОО — выберите пункты (можно несколько):", reply_markup=kb_goo(state))
+    key = q.data.split(":", 1)[1]
+    title, needs_areas, kind = GKP_META[key]
+    if key in state.gkp_selected:
+        state.gkp_selected.remove(key)
+        state.gkp_areas.pop(key, None)
+        await q.message.edit_reply_markup(reply_markup=kb_gkp(state))
+        await q.answer()
+        return
+    state.gkp_selected.add(key)
+    if needs_areas:
+        state.gkp_areas.setdefault(key, set())
+        codes = list_area_codes(kind)
+        await safe_edit_text(
+            q,
+            f"{title} — выберите районы (можно несколько):",
+            reply_markup=kb_area_picker(
+                prefix=f"gkp_area:{key}",
+                codes=codes,
+                selected=state.gkp_areas[key],
+                done_cb=f"gkp_area_done:{key}",
+                back_cb="inf_gkp",
+                cols=2,
+            ),
+        )
+        return
+    await q.message.edit_reply_markup(reply_markup=kb_gkp(state))
+    await q.answer()
 
-# -------------------- Call --------------------
+@dp.callback_query(F.data.startswith("gkp_area:"))
+async def gkp_area(q: CallbackQuery):
+    state = st(q.from_user.id)
+    _, key, code = q.data.split(":", 2)
+    state.gkp_areas.setdefault(key, set())
+    if code in state.gkp_areas[key]:
+        state.gkp_areas[key].remove(code)
+    else:
+        state.gkp_areas[key].add(code)
+    _title, _needs, kind = GKP_META[key]
+    codes = list_area_codes(kind)
+    await q.message.edit_reply_markup(
+        reply_markup=kb_area_picker(
+            prefix=f"gkp_area:{key}",
+            codes=codes,
+            selected=state.gkp_areas[key],
+            done_cb=f"gkp_area_done:{key}",
+            back_cb="inf_gkp",
+            cols=2,
+        )
+    )
+    await q.answer()
 
-@dp.message(F.text.regexp(r"^✅?\s*📞 Допрозвон"))
-async def inf_call(m: Message):
-    state = st(m.from_user.id)
-    state.current_menu = "call_who"
+@dp.callback_query(F.data.startswith("gkp_area_done:"))
+async def gkp_area_done(q: CallbackQuery):
+    await safe_edit_text(q, "Запрос на ГКП — выберите нужные пункты (можно несколько):", reply_markup=kb_gkp(st(q.from_user.id)))
+
+@dp.callback_query(F.data == "gkp_done")
+async def gkp_done(q: CallbackQuery):
+    state = st(q.from_user.id)
+    txt_md = gkp_aggregated_markdown(state)
+    if txt_md:
+        upsert_task_markdown(state, "AGG_GKP", txt_md)
+        await q.answer("Добавлено")
+    else:
+        remove_task_by_key(state, "AGG_GKP")
+        await q.answer("Ничего не выбрано")
+    await show_inforg_menu(q)
+
+# -------------------- ГОО --------------------
+
+@dp.callback_query(F.data == "inf_goo")
+async def inf_goo(q: CallbackQuery):
+    state = st(q.from_user.id)
+    state.waiting_input = None
+    await safe_edit_text(q, "Запрос на ГОО — выберите пункты (можно несколько):", reply_markup=kb_goo(state))
+
+@dp.callback_query(F.data.startswith("goo_toggle:"))
+async def goo_toggle(q: CallbackQuery):
+    state = st(q.from_user.id)
+    state.waiting_input = None
+    key = q.data.split(":", 1)[1]
+    title, needs_areas, _kind = GOO_META[key]
+    if key in state.goo_selected:
+        state.goo_selected.remove(key)
+        state.goo_areas.pop(key, None)
+        if key == "goo_custom":
+            state.goo_custom = ""
+        await q.message.edit_reply_markup(reply_markup=kb_goo(state))
+        await q.answer()
+        return
+    state.goo_selected.add(key)
+    if key == "goo_custom":
+        state.waiting_input = "goo_custom"
+        await safe_edit_text(q, "Запрос на ГОО → Произвольная информация — впишите текст сообщением.", reply_markup=kb_cancel("inf_goo"))
+        return
+    if needs_areas:
+        state.goo_areas.setdefault(key, set())
+        await safe_edit_text(q, f"{title} — выберите (можно несколько):", reply_markup=kb_goo_areas(key, state))
+        return
+    await q.message.edit_reply_markup(reply_markup=kb_goo(state))
+    await q.answer()
+
+@dp.callback_query(F.data.startswith("goo_area:"))
+async def goo_area(q: CallbackQuery):
+    state = st(q.from_user.id)
+    _, key, code = q.data.split(":", 2)
+    state.goo_areas.setdefault(key, set())
+    if code in state.goo_areas[key]:
+        state.goo_areas[key].remove(code)
+    else:
+        state.goo_areas[key].add(code)
+    await q.message.edit_reply_markup(reply_markup=kb_goo_areas(key, state))
+    await q.answer()
+
+@dp.callback_query(F.data.startswith("goo_area_done:"))
+async def goo_area_done(q: CallbackQuery):
+    await safe_edit_text(q, "Запрос на ГОО — выберите пункты (можно несколько):", reply_markup=kb_goo(st(q.from_user.id)))
+
+@dp.callback_query(F.data == "goo_done")
+async def goo_done(q: CallbackQuery):
+    state = st(q.from_user.id)
+    txt_md = goo_aggregated_markdown(state)
+    if txt_md:
+        upsert_task_markdown(state, "AGG_GOO", txt_md)
+        await q.answer("Добавлено")
+    else:
+        remove_task_by_key(state, "AGG_GOO")
+        await q.answer("Ничего не выбрано")
+    await show_inforg_menu(q)
+
+# -------------------- Допрозвон --------------------
+
+@dp.callback_query(F.data == "inf_call")
+async def inf_call(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = "call_who"
-    
-    if not state.call_entries:
-        state.call_entries.append(CallEntry())
-        state.call_active = 0
-    
-    await m.answer("Допрозвон\n\nКого нужно прозвонить? Напишите текст сообщением.", reply_markup=kb_cancel())
+    ensure_active_call_entry(state)
+    await safe_edit_text(q, "Допрозвон\n\nКого нужно прозвонить? Напишите текст сообщением.", reply_markup=kb_cancel("main_inforg"))
 
-@dp.message(F.text == "➕ Добавить ещё допрозвон")
-async def call_new_entry(m: Message):
-    state = st(m.from_user.id)
+@dp.callback_query(F.data == "call_new_entry")
+async def call_new_entry(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.call_entries.append(CallEntry())
     state.call_active = len(state.call_entries) - 1
     state.call_cat = None
     state.waiting_input = "call_who"
-    await m.answer("Новый допрозвон\n\nКого нужно прозвонить? Напишите текст сообщением.", reply_markup=kb_cancel())
+    await safe_edit_text(q, "Новый допрозвон\n\nКого нужно прозвонить? Напишите текст сообщением.", reply_markup=kb_cancel("main_inforg"))
 
-@dp.message(F.text == "👈 Назад к категориям")
-async def call_back_to_cats(m: Message):
-    state = st(m.from_user.id)
-    state.current_menu = "call_categories"
+@dp.callback_query(F.data == "call_back_to_cats")
+async def call_back_to_cats(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = None
-    state.call_questions_offset = 0
-    await m.answer("Допрозвон — выберите категорию:", reply_markup=kb_call_categories(state))
+    await safe_edit_text(q, "Допрозвон — выберите категорию:", reply_markup=kb_call_categories(state))
 
-@dp.message(F.text == "✏️ Ручной ввод")
-async def call_manual(m: Message):
-    state = st(m.from_user.id)
-    if state.current_menu == "call_questions":
-        state.waiting_input = "call_manual"
-        await m.answer("Введите свой вопрос/текст (сообщением).", reply_markup=kb_cancel())
+@dp.callback_query(F.data.startswith("call_cat:"))
+async def call_cat(q: CallbackQuery):
+    state = st(q.from_user.id)
+    state.waiting_input = None
+    cat_key = q.data.split(":", 1)[1]
+    state.call_cat = cat_key
+    entry = ensure_active_call_entry(state)
+    who_line = f"Кого прозвонить: {entry.who.strip()}" if entry.who.strip() else "Кого прозвонить: (не заполнено)"
+    hint = build_questions_hint(cat_key, entry)
+    await safe_edit_text(
+        q,
+        f"Допрозвон → {CALL_META.get(cat_key, cat_key)}\n{who_line}\n\nВыберите нужные вопросы.\n\n{hint}",
+        reply_markup=kb_call_questions(state, cat_key)
+    )
 
-@dp.message(F.text == "➡️ Показать ещё вопросы")
-async def call_show_more(m: Message):
-    state = st(m.from_user.id)
-    if state.current_menu == "call_questions" and state.call_cat:
-        state.call_questions_offset += 20
-        entry = state.call_entries[state.call_active]
-        selected = entry.selected.setdefault(state.call_cat, set())
-        await m.answer("Допрозвон → Следующие вопросы:", 
-                      reply_markup=kb_call_questions(state.call_cat, selected, state.call_questions_offset))
+@dp.callback_query(F.data.startswith("call_q:"))
+async def call_q_toggle(q: CallbackQuery):
+    state = st(q.from_user.id)
+    _, cat_key, idx_s = q.data.split(":", 2)
+    idx = int(idx_s)
+    entry = ensure_active_call_entry(state)
+    selected = entry.selected.setdefault(cat_key, set())
+    if idx in selected:
+        selected.remove(idx)
+    else:
+        selected.add(idx)
+    who_line = f"Кого прозвонить: {entry.who.strip()}" if entry.who.strip() else "Кого прозвонить: (не заполнено)"
+    hint = build_questions_hint(cat_key, entry)
+    await safe_edit_text(
+        q,
+        f"Допрозвон → {CALL_META.get(cat_key, cat_key)}\n{who_line}\n\nВыберите нужные вопросы.\n\n{hint}",
+        reply_markup=kb_call_questions(state, cat_key)
+    )
+    await q.answer()
 
-@dp.message(F.text == "⬅️ Показать предыдущие")
-async def call_show_prev(m: Message):
-    state = st(m.from_user.id)
-    if state.current_menu == "call_questions" and state.call_cat:
-        state.call_questions_offset = max(0, state.call_questions_offset - 20)
-        entry = state.call_entries[state.call_active]
-        selected = entry.selected.setdefault(state.call_cat, set())
-        await m.answer("Допрозвон → Предыдущие вопросы:", 
-                      reply_markup=kb_call_questions(state.call_cat, selected, state.call_questions_offset))
+@dp.callback_query(F.data.startswith("call_manual:"))
+async def call_manual(q: CallbackQuery):
+    state = st(q.from_user.id)
+    state.call_cat = q.data.split(":", 1)[1]
+    state.waiting_input = "call_manual"
+    await safe_edit_text(q, "Введите свой вопрос/текст (сообщением).", reply_markup=kb_cancel("call_back_to_cats"))
 
-# -------------------- Vyezd --------------------
+@dp.callback_query(F.data == "call_done")
+async def call_done(q: CallbackQuery):
+    state = st(q.from_user.id)
+    state.waiting_input = None
+    upsert_calls_task(state)
+    await q.answer("Готово")
+    await show_inforg_menu(q)
 
-@dp.message(F.text == "🚗 Выезд")
-async def main_vyezd(m: Message):
-    state = st(m.from_user.id)
-    state.current_menu = "vyezd_hq_address"
+# -------------------- Глава «Выезд» --------------------
+
+@dp.callback_query(F.data == "main_vyezd")
+async def main_vyezd(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = "vyezd_hq_address"
-    await m.answer("Выезд\n\nВведите адрес штаба (сообщением).", reply_markup=kb_cancel())
+    await safe_edit_text(q, "Выезд\n\nВведите адрес штаба (сообщением).", reply_markup=kb_cancel("back_main"))
 
-@dp.message(F.text == "👉 Дальше")
-async def vyezd_to_hqteam(m: Message):
-    state = st(m.from_user.id)
-    if state.current_menu == "vyezd_equip":
-        state.current_menu = "vyezd_hq_team"
-        await m.answer("Выезд → Запрос штабной команды (можно несколько):", reply_markup=kb_hq_team(state.vyezd.hq_team))
-
-# -------------------- Resources --------------------
-
-@dp.message(F.text == "🛠 Запрос на ресурсы")
-async def main_resources(m: Message):
-    state = st(m.from_user.id)
-    state.current_menu = "resources_menu"
+@dp.callback_query(F.data == "vyezd_equip")
+async def vyezd_equip(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = None
-    await m.answer("Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
+    await safe_edit_text(q, "Выезд → Запрос оборудования", reply_markup=kb_equip_menu(state.vyezd))
 
-@dp.message(F.text.regexp(r"^✅?\s*🗺 Запрос на Карты"))
-async def res_maps(m: Message):
-    state = st(m.from_user.id)
+@dp.callback_query(F.data.startswith("vyezd_clothes:"))
+async def vyezd_clothes(q: CallbackQuery):
+    state = st(q.from_user.id)
+    opt = q.data.split(":", 1)[1]
+    state.vyezd.clothes = opt
+    await q.answer("Выбрано")
+    # дальше: взять с собой
+    await safe_edit_text(q, "Выезд → Взять с собой (можно несколько):", reply_markup=kb_vyezd_take(state.vyezd.take))
+
+@dp.callback_query(F.data.startswith("vyezd_take:"))
+async def vyezd_take_toggle(q: CallbackQuery):
+    state = st(q.from_user.id)
+    opt = q.data.split(":", 1)[1]
+    if opt in state.vyezd.take:
+        state.vyezd.take.remove(opt)
+    else:
+        state.vyezd.take.add(opt)
+    await q.message.edit_reply_markup(reply_markup=kb_vyezd_take(state.vyezd.take))
+    await q.answer()
+
+@dp.callback_query(F.data == "vyezd_take_done")
+async def vyezd_take_done(q: CallbackQuery):
+    state = st(q.from_user.id)
+    await safe_edit_text(q, "Выезд → Запрос оборудования:", reply_markup=kb_equip_menu(state.vyezd))
+
+@dp.callback_query(F.data.startswith("eq:"))
+async def eq_open(q: CallbackQuery):
+    state = st(q.from_user.id)
+    kind = q.data.split(":", 1)[1]
+    await safe_edit_text(q, f"Оборудование → {EQUIP_TITLES[kind]}\nВыберите количество или введите своё:", reply_markup=kb_equip_qty(kind))
+
+@dp.callback_query(F.data.startswith("eq_set:"))
+async def eq_set(q: CallbackQuery):
+    state = st(q.from_user.id)
+    _, kind, n = q.data.split(":", 2)
+    state.vyezd.equip_qty[kind] = int(n)
+    await q.answer("Установлено")
+    await safe_edit_text(q, "Выезд → Запрос оборудования:", reply_markup=kb_equip_menu(state.vyezd))
+
+@dp.callback_query(F.data.startswith("eq_custom:"))
+async def eq_custom(q: CallbackQuery):
+    state = st(q.from_user.id)
+    kind = q.data.split(":", 1)[1]
+    state.waiting_input = f"eq_custom:{kind}"
+    await safe_edit_text(q, f"Введите количество для «{EQUIP_TITLES[kind]}» (сообщением).", reply_markup=kb_cancel("vyezd_equip"))
+
+@dp.callback_query(F.data.startswith("eq_flag:"))
+async def eq_flag_toggle(q: CallbackQuery):
+    state = st(q.from_user.id)
+    flag = q.data.split(":", 1)[1]
+    if flag in state.vyezd.equip_flags:
+        state.vyezd.equip_flags.remove(flag)
+    else:
+        state.vyezd.equip_flags.add(flag)
+    await q.message.edit_reply_markup(reply_markup=kb_equip_menu(state.vyezd))
+    await q.answer()
+
+@dp.callback_query(F.data == "vyezd_to_hqteam")
+async def vyezd_to_hqteam(q: CallbackQuery):
+    state = st(q.from_user.id)
+    await safe_edit_text(q, "Выезд → Запрос штабной команды (можно несколько):", reply_markup=kb_hq_team(state.vyezd.hq_team))
+
+@dp.callback_query(F.data.startswith("hq_team:"))
+async def hq_team_toggle(q: CallbackQuery):
+    state = st(q.from_user.id)
+    role = q.data.split(":", 1)[1]
+    if role in state.vyezd.hq_team:
+        state.vyezd.hq_team.remove(role)
+    else:
+        state.vyezd.hq_team.add(role)
+    await q.message.edit_reply_markup(reply_markup=kb_hq_team(state.vyezd.hq_team))
+    await q.answer()
+
+@dp.callback_query(F.data == "vyezd_done")
+async def vyezd_done(q: CallbackQuery):
+    state = st(q.from_user.id)
+    state.waiting_input = None
+    upsert_vyezd_task(state)
+    await q.answer("Готово")
+    await show_main(q)
+
+# -------------------- Глава «Запрос на ресурсы» --------------------
+
+@dp.callback_query(F.data == "main_resources")
+async def main_resources(q: CallbackQuery):
+    state = st(q.from_user.id)
+    state.waiting_input = None
+    await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
+
+@dp.callback_query(F.data == "res_maps")
+async def res_maps(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = "res_maps_center"
-    await m.answer("Запрос на Карты\n\nВведите «Центр зоны» (сообщением).", reply_markup=kb_cancel())
+    await safe_edit_text(q, "Запрос на Карты\n\nВведите «Центр зоны» (сообщением).", reply_markup=kb_cancel("main_resources"))
 
-@dp.message(F.text.regexp(r"^✅?\s*🖨 Запрос на Ориентировки"))
-async def res_orients(m: Message):
-    state = st(m.from_user.id)
+@dp.callback_query(F.data == "res_orients")
+async def res_orients(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.waiting_input = "res_orient_qty"
-    await m.answer("Запрос на Ориентировки\n\nУкажите количество (сообщением).", reply_markup=kb_cancel())
+    await safe_edit_text(q, "Запрос на Ориентировки\n\nУкажите количество (сообщением).", reply_markup=kb_cancel("main_resources"))
 
-@dp.message(F.text.regexp(r"^✅?\s*🛴 Запрос на самокаты"))
-async def res_scooters(m: Message):
-    state = st(m.from_user.id)
+@dp.callback_query(F.data == "res_scooters")
+async def res_scooters(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.resources.scooters = not state.resources.scooters
     upsert_resources_task(state)
-    await m.answer("Обновлено", reply_markup=kb_resources_menu(state.resources))
+    await q.answer("Ок")
+    await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
 
-@dp.message(F.text.regexp(r"^✅?\s*🛸 Запрос на БПЛА"))
-async def res_uav(m: Message):
-    state = st(m.from_user.id)
+@dp.callback_query(F.data == "res_uav")
+async def res_uav(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.resources.uav = not state.resources.uav
     upsert_resources_task(state)
-    await m.answer("Обновлено", reply_markup=kb_resources_menu(state.resources))
+    await q.answer("Ок")
+    await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
 
-@dp.message(F.text.regexp(r"^✅?\s*🚁 Запрос на Ангелов"))
-async def res_angels(m: Message):
-    state = st(m.from_user.id)
+@dp.callback_query(F.data == "res_angels")
+async def res_angels(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.resources.angels = not state.resources.angels
     upsert_resources_task(state)
-    await m.answer("Обновлено", reply_markup=kb_resources_menu(state.resources))
+    await q.answer("Ок")
+    await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
 
-@dp.message(F.text.regexp(r"^✅?\s*🐴 Запрос на Пегасов"))
-async def res_pegas(m: Message):
-    state = st(m.from_user.id)
+@dp.callback_query(F.data == "res_pegas")
+async def res_pegas(q: CallbackQuery):
+    state = st(q.from_user.id)
     state.resources.pegas = not state.resources.pegas
     upsert_resources_task(state)
-    await m.answer("Обновлено", reply_markup=kb_resources_menu(state.resources))
+    await q.answer("Ок")
+    await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
 
-@dp.message(F.text.regexp(r"^✅?\s*🧢 Запрос на технику"))
-async def res_tech(m: Message):
-    state = st(m.from_user.id)
-    state.current_menu = "tech_picker"
-    await m.answer("Запрос на технику (можно несколько):", reply_markup=kb_tech_picker(state.resources.tech))
+@dp.callback_query(F.data == "res_tech")
+async def res_tech(q: CallbackQuery):
+    state = st(q.from_user.id)
+    await safe_edit_text(q, "Запрос на технику (можно несколько):", reply_markup=kb_tech_picker(state.resources.tech))
 
-# -------------------- Text Input Handler --------------------
+@dp.callback_query(F.data.startswith("tech:"))
+async def tech_toggle(q: CallbackQuery):
+    state = st(q.from_user.id)
+    opt = q.data.split(":", 1)[1]
+    if opt in state.resources.tech:
+        state.resources.tech.remove(opt)
+    else:
+        state.resources.tech.add(opt)
+    await q.message.edit_reply_markup(reply_markup=kb_tech_picker(state.resources.tech))
+    await q.answer()
+
+@dp.callback_query(F.data == "tech_done")
+async def tech_done(q: CallbackQuery):
+    state = st(q.from_user.id)
+    upsert_resources_task(state)
+    await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
+
+@dp.callback_query(F.data == "res_done")
+async def res_done(q: CallbackQuery):
+    state = st(q.from_user.id)
+    upsert_resources_task(state)
+    await q.answer("Готово")
+    await show_main(q)
+
+# -------------------- Текстовые ответы пользователя --------------------
 
 TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
-@dp.message(F.text)
+@dp.message()
 async def on_text(m: Message):
     state = st(m.from_user.id)
+    if not state.waiting_input:
+        return
     text = (m.text or "").strip()
-    
     if not text:
         return
-    
-    # Обработка отмены
-    if text == "❌ Отмена":
+
+    # --- custom (в итогах без "Пользовательский запрос") ---
+    if state.waiting_input == "custom":
+        remove_task_by_key(state, "custom")
+        add_task_plain(state, "custom", text)
         state.waiting_input = None
-        if state.current_menu in ["inforg", "gkp", "goo", "call_categories"]:
-            await m.answer("Отменено", reply_markup=kb_inforg(state))
-        else:
-            state.current_menu = "main"
-            await m.answer("Отменено", reply_markup=kb_main())
-        return
-    
-    # --- ВАЖНО: Сначала проверяем waiting_input ---
-    if state.waiting_input:
-        # custom
-        if state.waiting_input == "custom":
-            remove_task_by_key(state, "custom")
-            add_task_plain(state, "custom", text)
-            state.waiting_input = None
-            state.current_menu = "inforg"
-            await m.answer("Принято.", reply_markup=kb_inforg(state))
-            return
-        
-        # goo_custom
-        if state.waiting_input == "goo_custom":
-            state.goo_custom = text
-            state.waiting_input = None
-            state.current_menu = "goo"
-            await m.answer("Принято. Вернуться к ГОО:", reply_markup=kb_goo(state))
-            return
-        
-        # call_who
-        if state.waiting_input == "call_who":
-            if not state.call_entries:
-                state.call_entries.append(CallEntry())
-                state.call_active = 0
-            entry = state.call_entries[state.call_active]
-            entry.who = text
-            state.waiting_input = None
-            state.current_menu = "call_categories"
-            await m.answer("Принято. Теперь выберите категорию вопросов:", 
-                         reply_markup=kb_call_categories(state))
-            return
-        
-        # call_manual
-        if state.waiting_input == "call_manual":
-            cat_key = state.call_cat
-            if not cat_key:
-                state.waiting_input = None
-                await m.answer("Категория не выбрана. Откройте «Допрозвон» заново.", reply_markup=kb_main())
-                return
-            entry = state.call_entries[state.call_active]
-            entry.manual.setdefault(cat_key, []).append(text)
-            state.waiting_input = None
-            state.current_menu = "call_questions"
-            selected = entry.selected.setdefault(cat_key, set())
-            await m.answer("Добавлено.", reply_markup=kb_call_questions(cat_key, selected, state.call_questions_offset))
-            return
-        
-        # vyezd_hq_address
-        if state.waiting_input == "vyezd_hq_address":
-            state.vyezd.hq_address = text
-            state.waiting_input = "vyezd_hq_coords"
-            await m.answer("Введите координаты штаба (сообщением).", reply_markup=kb_cancel())
-            return
-        
-        # vyezd_hq_coords
-        if state.waiting_input == "vyezd_hq_coords":
-            state.vyezd.hq_coords = text
-            state.waiting_input = "vyezd_hq_time"
-            await m.answer("Введите время штаба в формате HH:MM (24-часовой).", reply_markup=kb_cancel())
-            return
-        
-        # vyezd_hq_time
-        if state.waiting_input == "vyezd_hq_time":
-            if not TIME_RE.match(text):
-                await m.answer("Неверный формат. Нужно HH:MM (например 09:30 или 18:05). Повторите ввод.")
-                return
-            state.vyezd.hq_time = text
-            state.waiting_input = None
-            state.current_menu = "vyezd_clothes"
-            await m.answer("Выберите форму одежды:", reply_markup=kb_vyezd_clothes(state.vyezd.clothes))
-            return
-        
-        # eq_custom
-        if state.waiting_input.startswith("eq_custom:"):
-            kind = state.waiting_input.split(":", 1)[1]
-            if not text.isdigit() or int(text) <= 0:
-                await m.answer("Введите положительное целое число.")
-                return
-            state.vyezd.equip_qty[kind] = int(text)
-            state.waiting_input = None
-            state.current_menu = "vyezd_equip"
-            await m.answer("Установлено.", reply_markup=kb_equip_menu(state.vyezd))
-            return
-        
-        # res_maps_center
-        if state.waiting_input == "res_maps_center":
-            state.resources.maps_center = text
-            state.waiting_input = "res_maps_limits"
-            await m.answer("Введите «Ограничители зоны» (сообщением).", reply_markup=kb_cancel())
-            return
-        
-        # res_maps_limits
-        if state.waiting_input == "res_maps_limits":
-            state.resources.maps_limits = text
-            state.waiting_input = "res_maps_grid"
-            await m.answer("Введите «Шаг сетки» (сообщением).", reply_markup=kb_cancel())
-            return
-        
-        # res_maps_grid
-        if state.waiting_input == "res_maps_grid":
-            state.resources.maps_grid = text
-            state.waiting_input = "res_maps_phonekit"
-            state.current_menu = "res_maps_phonekit"
-            await m.answer("Комплект для телефонов?", reply_markup=kb_yes_no())
-            return
-        
-        # res_maps_phonekit
-        if state.waiting_input == "res_maps_phonekit":
-            if text == "Да":
-                state.resources.maps_phonekit = True
-            elif text == "Нет":
-                state.resources.maps_phonekit = False
-            else:
-                await m.answer("Выберите Да или Нет", reply_markup=kb_yes_no())
-                return
-            state.waiting_input = None
-            state.current_menu = "resources_menu"
-            upsert_resources_task(state)
-            await m.answer("Принято.", reply_markup=kb_resources_menu(state.resources))
-            return
-        
-        # res_orient_qty
-        if state.waiting_input == "res_orient_qty":
-            if not text.isdigit() or int(text) < 0:
-                await m.answer("Введите число (0 или больше).")
-                return
-            state.resources.orient_qty = int(text)
-            state.waiting_input = None
-            state.current_menu = "resources_menu"
-            upsert_resources_task(state)
-            await m.answer("Принято.", reply_markup=kb_resources_menu(state.resources))
-            return
-    
-    # --- Теперь проверяем current_menu ---
-    
-    # --- GKP Selection ---
-    if state.current_menu == "gkp":
-        for key, title, needs_areas, kind in GKP_ITEMS:
-            if text.replace("✅ ", "") == title:
-                if key in state.gkp_selected:
-                    state.gkp_selected.remove(key)
-                    state.gkp_areas.pop(key, None)
-                    await m.answer("Убрано", reply_markup=kb_gkp(state))
-                else:
-                    state.gkp_selected.add(key)
-                    if needs_areas:
-                        state.gkp_current_key = key
-                        state.gkp_areas.setdefault(key, set())
-                        state.current_menu = "gkp_areas"
-                        await m.answer(f"{title} — выберите районы (можно несколько):", 
-                                     reply_markup=kb_areas(kind, state.gkp_areas[key]))
-                    else:
-                        await m.answer("Добавлено", reply_markup=kb_gkp(state))
-                return
-        return
-    
-    # --- GKP Areas Selection ---
-    if state.current_menu == "gkp_areas" and state.gkp_current_key:
-        key = state.gkp_current_key
-        _, _, kind = GKP_META[key]
-        
-        if kind == "spb" and text.replace("✅ ", "") == "Весь город":
-            code = "SPB_ALL"
-            if code in state.gkp_areas[key]:
-                state.gkp_areas[key].remove(code)
-            else:
-                state.gkp_areas[key].add(code)
-            await m.answer("Обновлено", reply_markup=kb_areas(kind, state.gkp_areas[key]))
-            return
-        elif kind == "lo" and text.replace("✅ ", "") == "Вся область":
-            code = "LO_ALL"
-            if code in state.gkp_areas[key]:
-                state.gkp_areas[key].remove(code)
-            else:
-                state.gkp_areas[key].add(code)
-            await m.answer("Обновлено", reply_markup=kb_areas(kind, state.gkp_areas[key]))
-            return
-        
-        clean_text = text.replace("✅ ", "")
-        if kind == "spb":
-            for i, name in enumerate(SPB_DISTRICTS):
-                if clean_text == name:
-                    code = spb_code(i)
-                    if code in state.gkp_areas[key]:
-                        state.gkp_areas[key].remove(code)
-                    else:
-                        state.gkp_areas[key].add(code)
-                    await m.answer("Обновлено", reply_markup=kb_areas(kind, state.gkp_areas[key]))
-                    return
-        elif kind == "lo":
-            for i, name in enumerate(LO_DISTRICTS):
-                if clean_text == name:
-                    code = lo_code(i)
-                    if code in state.gkp_areas[key]:
-                        state.gkp_areas[key].remove(code)
-                    else:
-                        state.gkp_areas[key].add(code)
-                    await m.answer("Обновлено", reply_markup=kb_areas(kind, state.gkp_areas[key]))
-                    return
-        return
-    
-    # --- GOO Selection ---
-    if state.current_menu == "goo":
-        for key, title, needs_areas, kind in GOO_ITEMS:
-            if text.replace("✅ ", "") == title:
-                if key in state.goo_selected:
-                    state.goo_selected.remove(key)
-                    state.goo_areas.pop(key, None)
-                    if key == "goo_custom":
-                        state.goo_custom = ""
-                    await m.answer("Убрано", reply_markup=kb_goo(state))
-                else:
-                    state.goo_selected.add(key)
-                    if key == "goo_custom":
-                        state.waiting_input = "goo_custom"
-                        await m.answer("Запрос на ГОО → Произвольная информация — впишите текст сообщением.", 
-                                     reply_markup=kb_cancel())
-                    elif needs_areas:
-                        state.goo_current_key = key
-                        state.goo_areas.setdefault(key, set())
-                        state.current_menu = "goo_areas"
-                        await m.answer(f"{title} — выберите (можно несколько):", 
-                                     reply_markup=kb_areas(kind, state.goo_areas[key]))
-                    else:
-                        await m.answer("Добавлено", reply_markup=kb_goo(state))
-                return
-        return
-    
-    # --- GOO Areas Selection ---
-    if state.current_menu == "goo_areas" and state.goo_current_key:
-        key = state.goo_current_key
-        _, _, kind = GOO_META[key]
-        
-        if kind == "spb" and text.replace("✅ ", "") == "Весь город":
-            code = "SPB_ALL"
-            if code in state.goo_areas[key]:
-                state.goo_areas[key].remove(code)
-            else:
-                state.goo_areas[key].add(code)
-            await m.answer("Обновлено", reply_markup=kb_areas(kind, state.goo_areas[key]))
-            return
-        elif kind == "lo" and text.replace("✅ ", "") == "Вся область":
-            code = "LO_ALL"
-            if code in state.goo_areas[key]:
-                state.goo_areas[key].remove(code)
-            else:
-                state.goo_areas[key].add(code)
-            await m.answer("Обновлено", reply_markup=kb_areas(kind, state.goo_areas[key]))
-            return
-        
-        clean_text = text.replace("✅ ", "")
-        if kind == "spb":
-            for i, name in enumerate(SPB_DISTRICTS):
-                if clean_text == name:
-                    code = spb_code(i)
-                    if code in state.goo_areas[key]:
-                        state.goo_areas[key].remove(code)
-                    else:
-                        state.goo_areas[key].add(code)
-                    await m.answer("Обновлено", reply_markup=kb_areas(kind, state.goo_areas[key]))
-                    return
-        elif kind == "lo":
-            for i, name in enumerate(LO_DISTRICTS):
-                if clean_text == name:
-                    code = lo_code(i)
-                    if code in state.goo_areas[key]:
-                        state.goo_areas[key].remove(code)
-                    else:
-                        state.goo_areas[key].add(code)
-                    await m.answer("Обновлено", reply_markup=kb_areas(kind, state.goo_areas[key]))
-                    return
-        return
-    
-    # --- Call Categories ---
-    if state.current_menu == "call_categories":
-        for cat_key, title in CALL_CATEGORIES:
-            if text.replace("✅ ", "") == title:
-                state.call_cat = cat_key
-                state.current_menu = "call_questions"
-                state.call_questions_offset = 0
-                entry = state.call_entries[state.call_active]
-                selected = entry.selected.setdefault(cat_key, set())
-                await m.answer(f"Допрозвон → {title}\n\nВыберите нужные вопросы.", 
-                             reply_markup=kb_call_questions(cat_key, selected, 0))
-                return
-        return
-    
-    # --- Call Questions ---
-    if state.current_menu == "call_questions" and state.call_cat:
-        cat_key = state.call_cat
-        questions = CALL_QUESTIONS.get(cat_key, [])
-        entry = state.call_entries[state.call_active]
-        selected = entry.selected.setdefault(cat_key, set())
-        
-        clean_text = text.replace("✅ ", "")
-        
-        # Проверяем все вопросы (не только текущую страницу)
-        for idx, q in enumerate(questions):
-            short_q = q[:40] + "..." if len(q) > 40 else q
-            if clean_text == short_q or clean_text == q:
-                if idx in selected:
-                    selected.remove(idx)
-                else:
-                    selected.add(idx)
-                await m.answer("Обновлено", reply_markup=kb_call_questions(cat_key, selected, state.call_questions_offset))
-                return
-        return
-    
-    # --- Vyezd Clothes ---
-    if state.current_menu == "vyezd_clothes":
-        for opt in VYEZD_CLOTHES:
-            if text.replace("✅ ", "") == opt:
-                state.vyezd.clothes = opt
-                state.current_menu = "vyezd_take"
-                await m.answer("Выезд → Взять с собой (можно несколько):", 
-                             reply_markup=kb_vyezd_take(state.vyezd.take))
-                return
-        return
-    
-    # --- Vyezd Take ---
-    if state.current_menu == "vyezd_take":
-        for opt in VYEZD_TAKE:
-            if text.replace("✅ ", "") == opt:
-                if opt in state.vyezd.take:
-                    state.vyezd.take.remove(opt)
-                else:
-                    state.vyezd.take.add(opt)
-                await m.answer("Обновлено", reply_markup=kb_vyezd_take(state.vyezd.take))
-                return
-        return
-    
-    # --- Vyezd Equipment Menu ---
-    if state.current_menu == "vyezd_equip":
-        equip_map = {
-            "🔦 Фонари": "flashlights",
-            "🔋 Аккумуляторы": "batteries",
-            "📢 Рации": "radios",
-            "🗺️ Навигаторы": "navigators",
-            "🧭 Компасы": "compasses",
-        }
-        clean_text = text.replace("✅ ", "")
-        for label, kind in equip_map.items():
-            if clean_text == label:
-                state.vyezd_equip_current = kind
-                state.current_menu = "vyezd_equip_qty"
-                await m.answer(f"Оборудование → {EQUIP_TITLES[kind]}\nВыберите количество или введите своё:", 
-                             reply_markup=kb_equip_qty(kind))
-                return
-        
-        # Flags
-        if clean_text == "🔌 Инвертор":
-            flag = "inverter"
-            if flag in state.vyezd.equip_flags:
-                state.vyezd.equip_flags.remove(flag)
-            else:
-                state.vyezd.equip_flags.add(flag)
-            await m.answer("Обновлено", reply_markup=kb_equip_menu(state.vyezd))
-            return
-        elif clean_text == "📄 Скотч":
-            flag = "tape"
-            if flag in state.vyezd.equip_flags:
-                state.vyezd.equip_flags.remove(flag)
-            else:
-                state.vyezd.equip_flags.add(flag)
-            await m.answer("Обновлено", reply_markup=kb_equip_menu(state.vyezd))
-            return
-        elif clean_text == "⚡ Power bank":
-            flag = "powerbank"
-            if flag in state.vyezd.equip_flags:
-                state.vyezd.equip_flags.remove(flag)
-            else:
-                state.vyezd.equip_flags.add(flag)
-            await m.answer("Обновлено", reply_markup=kb_equip_menu(state.vyezd))
-            return
-        return
-    
-    # --- Vyezd Equipment Quantity ---
-    if state.current_menu == "vyezd_equip_qty" and state.vyezd_equip_current:
-        kind = state.vyezd_equip_current
-        
-        if text == "✏️ Ввести количество":
-            state.waiting_input = f"eq_custom:{kind}"
-            await m.answer(f"Введите количество для «{EQUIP_TITLES[kind]}» (сообщением).", 
-                         reply_markup=kb_cancel())
-            return
-        
-        # Check presets
-        if text.isdigit():
-            n = int(text)
-            if n in EQUIP_PRESETS[kind]:
-                state.vyezd.equip_qty[kind] = n
-                state.current_menu = "vyezd_equip"
-                await m.answer("Установлено", reply_markup=kb_equip_menu(state.vyezd))
-                return
-        return
-    
-    # --- HQ Team ---
-    if state.current_menu == "vyezd_hq_team":
-        for role in HQ_TEAM_ROLES:
-            if text.replace("✅ ", "") == role:
-                if role in state.vyezd.hq_team:
-                    state.vyezd.hq_team.remove(role)
-                else:
-                    state.vyezd.hq_team.add(role)
-                await m.answer("Обновлено", reply_markup=kb_hq_team(state.vyezd.hq_team))
-                return
-        return
-    
-    # --- Tech Picker ---
-    if state.current_menu == "tech_picker":
-        for opt in TECH_OPTIONS:
-            if text.replace("✅ ", "") == opt:
-                if opt in state.resources.tech:
-                    state.resources.tech.remove(opt)
-                else:
-                    state.resources.tech.add(opt)
-                await m.answer("Обновлено", reply_markup=kb_tech_picker(state.resources.tech))
-                return
+        await m.answer("Принято.", reply_markup=kb_main())
         return
 
-# -------------------- Main --------------------
+    # --- goo_custom ---
+    if state.waiting_input == "goo_custom":
+        state.goo_custom = text
+        state.waiting_input = None
+        await m.answer("Принято. Вернуться к ГОО:", reply_markup=kb_goo(state))
+        return
+
+    # --- call_who ---
+    if state.waiting_input == "call_who":
+        entry = ensure_active_call_entry(state)
+        entry.who = text
+        state.waiting_input = None
+        await m.answer("Принято. Теперь выберите категорию вопросов:", reply_markup=kb_call_categories(state))
+        return
+
+    # --- call_manual ---
+    if state.waiting_input == "call_manual":
+        cat_key = state.call_cat
+        if not cat_key:
+            state.waiting_input = None
+            await m.answer("Категория не выбрана. Откройте «Допрозвон» заново.", reply_markup=kb_main())
+            return
+        entry = ensure_active_call_entry(state)
+        entry.manual.setdefault(cat_key, []).append(text)
+        state.waiting_input = None
+        await m.answer("Добавлено.", reply_markup=kb_call_questions(state, cat_key))
+        return
+
+    # --- VYEZD flow ---
+    if state.waiting_input == "vyezd_hq_address":
+        state.vyezd.hq_address = text
+        state.waiting_input = "vyezd_hq_coords"
+        await m.answer("Введите координаты штаба (сообщением).", reply_markup=kb_cancel("back_main"))
+        return
+
+    if state.waiting_input == "vyezd_hq_coords":
+        state.vyezd.hq_coords = text
+        state.waiting_input = "vyezd_hq_time"
+        await m.answer("Введите время штаба в формате HH:MM (24-часовой).", reply_markup=kb_cancel("back_main"))
+        return
+
+    if state.waiting_input == "vyezd_hq_time":
+        if not TIME_RE.match(text):
+            await m.answer("Неверный формат. Нужно HH:MM (например 09:30 или 18:05). Повторите ввод.")
+            return
+        state.vyezd.hq_time = text
+        state.waiting_input = None
+        await m.answer("Выберите форму одежды:", reply_markup=kb_vyezd_clothes(state.vyezd.clothes))
+        return
+
+    if state.waiting_input.startswith("eq_custom:"):
+        kind = state.waiting_input.split(":", 1)[1]
+        if not text.isdigit() or int(text) <= 0:
+            await m.answer("Введите положительное целое число.")
+            return
+        state.vyezd.equip_qty[kind] = int(text)
+        state.waiting_input = None
+        await m.answer("Установлено.", reply_markup=kb_equip_menu(state.vyezd))
+        return
+
+    # --- RESOURCES flow ---
+    if state.waiting_input == "res_maps_center":
+        state.resources.maps_center = text
+        state.waiting_input = "res_maps_limits"
+        await m.answer("Введите «Ограничители зоны» (сообщением).", reply_markup=kb_cancel("main_resources"))
+        return
+
+    if state.waiting_input == "res_maps_limits":
+        state.resources.maps_limits = text
+        state.waiting_input = "res_maps_grid"
+        await m.answer("Введите «Шаг сетки» (сообщением).", reply_markup=kb_cancel("main_resources"))
+        return
+
+    if state.waiting_input == "res_maps_grid":
+        state.resources.maps_grid = text
+        state.waiting_input = None
+        await m.answer(
+            "Комплект для телефонов?",
+            reply_markup=kb_yes_no("res_maps_phonekit:yes", "res_maps_phonekit:no", "main_resources")
+        )
+        return
+
+    if state.waiting_input == "res_orient_qty":
+        if not text.isdigit() or int(text) < 0:
+            await m.answer("Введите число (0 или больше).")
+            return
+        state.resources.orient_qty = int(text)
+        state.waiting_input = None
+        upsert_resources_task(state)
+        await m.answer("Принято.", reply_markup=kb_resources_menu(state.resources))
+        return
+
+# --- callback for maps phonekit ---
+@dp.callback_query(F.data.startswith("res_maps_phonekit:"))
+async def res_maps_phonekit(q: CallbackQuery):
+    state = st(q.from_user.id)
+    val = q.data.split(":", 1)[1]
+    state.resources.maps_phonekit = True if val == "yes" else False
+    upsert_resources_task(state)
+    await q.answer("Ок")
+    await safe_edit_text(q, "Запрос на ресурсы — выберите пункт:", reply_markup=kb_resources_menu(state.resources))
+
+# ----------- main -----------
 
 async def main():
     if not BOT_TOKEN or BOT_TOKEN == "PASTE_YOUR_BOT_TOKEN_HERE":
