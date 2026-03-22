@@ -14,7 +14,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
-BOT_TOKEN = "7867591820:AAGq7yL20aah-Diq4PwhtZMSuQkHr7i-zKU"
+BOT_TOKEN = "8534422390:AAHm6z-poKWBCOED8s3NEmQp4tAqzJ-wxsI"
 
 # -------------------- Справочники районов --------------------
 
